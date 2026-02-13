@@ -1,6 +1,5 @@
 import type { FunctionDependency } from '../types.js';
-import { isBrowserGlobal, isPureGlobal } from './browser-globals.js';
-import { CLIENT_ONLY_HOOKS } from './react-patterns.js';
+import { isBrowserGlobal, isAmbiguousGlobal, isPureGlobal } from './browser-globals.js';
 
 export interface TaintResult {
   /** Whether this function is tainted (references browser APIs) */
@@ -9,7 +8,9 @@ export interface TaintResult {
   browserGlobals: string[];
   /** Which globals are pure (Math, JSON, etc.) */
   pureGlobals: string[];
-  /** Which globals are unknown (not in either list) */
+  /** Cross-environment globals (fetch, crypto, etc.) */
+  ambiguousGlobals: string[];
+  /** Which globals are unknown (not in any list) */
   unknownGlobals: string[];
 }
 
@@ -17,7 +18,7 @@ export interface TaintResult {
  * Pass 1: Taint Analysis
  *
  * Classifies each function's global references as browser-tainted,
- * pure, or unknown.
+ * ambiguous (cross-environment), pure, or unknown.
  *
  * A function is "tainted" if it references any browser-only global
  * (window, document, localStorage, etc.).
@@ -25,11 +26,14 @@ export interface TaintResult {
 export function analyzeTaint(fn: FunctionDependency): TaintResult {
   const browserGlobals: string[] = [];
   const pureGlobals: string[] = [];
+  const ambiguousGlobals: string[] = [];
   const unknownGlobals: string[] = [];
 
   for (const global of fn.globals) {
     if (isBrowserGlobal(global)) {
       browserGlobals.push(global);
+    } else if (isAmbiguousGlobal(global)) {
+      ambiguousGlobals.push(global);
     } else if (isPureGlobal(global)) {
       pureGlobals.push(global);
     } else {
@@ -41,19 +45,9 @@ export function analyzeTaint(fn: FunctionDependency): TaintResult {
     tainted: browserGlobals.length > 0,
     browserGlobals,
     pureGlobals,
+    ambiguousGlobals,
     unknownGlobals,
   };
-}
-
-/**
- * Check if a function is inside a client-only hook callback.
- * This requires context about the parent call expression.
- *
- * For now, this is a simplified check based on imported hook names
- * in the function's dependency list.
- */
-export function isInClientOnlyHookContext(fn: FunctionDependency): boolean {
-  return fn.imported.some((name) => CLIENT_ONLY_HOOKS.has(name));
 }
 
 /**

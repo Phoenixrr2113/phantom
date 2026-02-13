@@ -3,6 +3,7 @@ import { analyze as analyzeScope } from 'eslint-scope';
 import type { Program, Node } from 'estree';
 import { addRanges } from './ast-compat.js';
 import { classifyModule } from './classify/index.js';
+import { extractModule } from './extract/index.js';
 import type {
   AnalyzedModule,
   AnalysisResult,
@@ -52,6 +53,9 @@ export function parseModule(code: string, path: string): AnalyzedModule {
 
   // 5. Build function dependency map from scope analysis
   const functions = buildFunctionDependencies(scopeManager);
+
+  // 6. Resolve names for anonymous functions from assignment context
+  resolveAnonymousNames(ast, functions);
 
   return { path, ast, functions, imports };
 }
@@ -183,10 +187,104 @@ function getFunctionName(node: Node): string {
     return (node.id as { name: string }).name;
   }
 
-  // ArrowFunctionExpression or FunctionExpression assigned to a variable
-  // The parent context would need to be tracked for this, so for now
-  // we return "<anonymous>" and can improve later
+  // FunctionExpression with an id (e.g., const x = function foo() {})
+  if (node.type === 'FunctionExpression' && 'id' in node && node.id) {
+    return (node.id as { name: string }).name;
+  }
+
   return '<anonymous>';
+}
+
+/**
+ * Resolve names for anonymous functions from their assignment context.
+ *
+ * After building FunctionDependency[], walk the AST to find:
+ * - `const foo = () => {}` → name is `foo` (VariableDeclarator parent)
+ * - `const foo = function() {}` → name is `foo` (VariableDeclarator parent)
+ * - `{ key: () => {} }` → name is the property key
+ *
+ * Matches functions to FunctionDependency entries by span (start/end).
+ */
+function resolveAnonymousNames(
+  ast: Program,
+  functions: FunctionDependency[],
+): void {
+  // Build a quick lookup from span → FunctionDependency for anonymous functions
+  const anonBySpan = new Map<string, FunctionDependency>();
+  for (const fn of functions) {
+    if (fn.name === '<anonymous>') {
+      anonBySpan.set(`${fn.span.start}:${fn.span.end}`, fn);
+    }
+  }
+  if (anonBySpan.size === 0) return;
+
+  walkWithParent(ast, null, (node, parent) => {
+    if (!isFunctionNode(node)) return;
+
+    const nStart = (node as Node & { start?: number }).start;
+    const nEnd = (node as Node & { end?: number }).end;
+    if (nStart == null || nEnd == null) return;
+
+    const key = `${nStart}:${nEnd}`;
+    const fn = anonBySpan.get(key);
+    if (!fn) return;
+
+    // Case 1: VariableDeclarator — `const foo = () => {}`
+    if (parent && parent.type === 'VariableDeclarator' && 'id' in parent) {
+      const id = parent.id as Node;
+      if (id.type === 'Identifier' && 'name' in id) {
+        fn.name = id.name as string;
+        anonBySpan.delete(key);
+        return;
+      }
+    }
+
+    // Case 2: Property / ObjectProperty — `{ key: () => {} }`
+    if (parent && (parent.type === 'Property' || (parent.type as string) === 'ObjectProperty')) {
+      const propKey = (parent as unknown as Record<string, unknown>).key as Node | undefined;
+      if (propKey && propKey.type === 'Identifier' && 'name' in propKey) {
+        fn.name = propKey.name as string;
+        anonBySpan.delete(key);
+        return;
+      }
+    }
+  });
+}
+
+function isFunctionNode(node: Node): boolean {
+  return (
+    node.type === 'ArrowFunctionExpression' ||
+    node.type === 'FunctionExpression'
+  );
+}
+
+/**
+ * Walk AST nodes, passing each node and its parent to the callback.
+ */
+function walkWithParent(
+  node: unknown,
+  parent: Node | null,
+  callback: (node: Node, parent: Node | null) => void,
+): void {
+  if (!node || typeof node !== 'object') return;
+
+  if (Array.isArray(node)) {
+    for (const child of node) {
+      walkWithParent(child, parent, callback);
+    }
+    return;
+  }
+
+  const obj = node as Record<string, unknown>;
+  if (typeof obj.type !== 'string') return;
+
+  const asNode = obj as unknown as Node;
+  callback(asNode, parent);
+
+  for (const key of Object.keys(obj)) {
+    if (key === 'type') continue;
+    walkWithParent(obj[key], asNode, callback);
+  }
 }
 
 /**
@@ -202,14 +300,25 @@ export function analyzeModule(
   // Phase 3: classification
   const segments = classifyModule(parsed, code);
 
-  // Phase 4: extraction (not yet implemented)
-  const hasServerExtractions = segments.some(
-    (s) => s.classification === 'ServerCompute',
-  );
+  // Phase 4: extraction
+  const confidenceThreshold = _options?.confidenceThreshold ?? 0.8;
+  const extracted = extractModule(parsed, segments, code, confidenceThreshold);
+
+  if (extracted) {
+    return {
+      path,
+      segments,
+      hasServerExtractions: true,
+      clientCode: extracted.clientCode,
+      serverModules: extracted.serverModules,
+    };
+  }
 
   return {
     path,
     segments,
-    hasServerExtractions,
+    hasServerExtractions: segments.some(
+      (s) => s.classification === 'ServerCompute',
+    ),
   };
 }

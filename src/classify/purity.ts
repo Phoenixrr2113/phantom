@@ -31,6 +31,12 @@ export function analyzePurity(
     return { pure: false, reasons };
   }
 
+  // If there are ambiguous globals (fetch, crypto, etc.), not pure
+  if (taint.ambiguousGlobals.length > 0) {
+    reasons.push(`References cross-environment APIs: ${taint.ambiguousGlobals.join(', ')}`);
+    return { pure: false, reasons };
+  }
+
   // If there are unknown globals, be conservative
   if (taint.unknownGlobals.length > 0) {
     reasons.push(`References unknown globals: ${taint.unknownGlobals.join(', ')}`);

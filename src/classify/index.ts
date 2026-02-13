@@ -31,6 +31,9 @@ export function classifyModule(
   // Determine parent hook context for each function
   const hookContexts = detectHookContexts(analyzed, sourceCode);
 
+  // Build span → AST node map for JSX detection
+  const astNodes = buildAstNodeMap(analyzed);
+
   // Pass 2 + 3: Purity analysis + boundary detection
   const segments: ClassifiedSegment[] = [];
   for (let i = 0; i < functions.length; i++) {
@@ -38,6 +41,7 @@ export function classifyModule(
     const taint = taintResults.get(fn)!;
     const purity = analyzePurity(fn, taint);
     const parentHook = hookContexts.get(fn) ?? null;
+    const astNode = astNodes.get(`${fn.span.start}:${fn.span.end}`) ?? null;
 
     const segment = classifySegment({
       fn,
@@ -47,12 +51,39 @@ export function classifyModule(
       sourceCode,
       filePath: analyzed.path,
       index: i,
+      astNode,
     });
 
     segments.push(segment);
   }
 
   return segments;
+}
+
+/**
+ * Build a map from span key to AST node for all function nodes.
+ * Used to pass AST nodes to the boundary classifier for JSX detection.
+ */
+function buildAstNodeMap(
+  analyzed: AnalyzedModule,
+): Map<string, Node> {
+  const nodeMap = new Map<string, Node>();
+
+  walkNode(analyzed.ast, (node) => {
+    if (
+      node.type === 'FunctionDeclaration' ||
+      node.type === 'FunctionExpression' ||
+      node.type === 'ArrowFunctionExpression'
+    ) {
+      const start = (node as Node & { start?: number }).start;
+      const end = (node as Node & { end?: number }).end;
+      if (start != null && end != null) {
+        nodeMap.set(`${start}:${end}`, node);
+      }
+    }
+  });
+
+  return nodeMap;
 }
 
 /**
@@ -78,10 +109,23 @@ function detectHookContexts(
     const call = node as CallExpression;
     const callee = call.callee;
 
-    // Check if callee is a hook identifier
-    if (callee.type !== 'Identifier') return;
-    const hookName = (callee as Identifier).name;
-    if (!hookNames.has(hookName)) return;
+    // Resolve hook name from callee
+    let hookName: string | null = null;
+
+    if (callee.type === 'Identifier') {
+      // Direct call: useMemo(...)
+      const name = (callee as Identifier).name;
+      if (hookNames.has(name)) hookName = name;
+    } else if (callee.type === 'MemberExpression') {
+      // Namespace call: React.useMemo(...)
+      const prop = (callee as { property: Node }).property;
+      if (prop.type === 'Identifier') {
+        const name = (prop as Identifier).name;
+        if (hookNames.has(name)) hookName = name;
+      }
+    }
+
+    if (!hookName) return;
 
     // First argument should be the callback
     const firstArg = call.arguments[0];

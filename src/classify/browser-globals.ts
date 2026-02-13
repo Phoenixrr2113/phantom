@@ -6,7 +6,6 @@ export const BROWSER_GLOBALS = new Set([
   // Window / global
   'window',
   'self',
-  'globalThis',
 
   // DOM
   'document',
@@ -34,7 +33,6 @@ export const BROWSER_GLOBALS = new Set([
   'PerformanceObserver',
 
   // Web APIs
-  'fetch', // Note: fetch exists on server too, but may be overridden — keep configurable
   'XMLHttpRequest',
   'WebSocket',
   'EventSource',
@@ -52,6 +50,13 @@ export const BROWSER_GLOBALS = new Set([
 
   // DOM constructors
   'HTMLElement',
+  'HTMLFormElement',
+  'HTMLInputElement',
+  'HTMLButtonElement',
+  'HTMLTextAreaElement',
+  'HTMLSelectElement',
+  'HTMLAnchorElement',
+  'HTMLImageElement',
   'Element',
   'Node',
   'Event',
@@ -62,22 +67,50 @@ export const BROWSER_GLOBALS = new Set([
   'DragEvent',
   'ClipboardEvent',
   'FocusEvent',
+  'FormData',
+
+  // DOM query/manipulation
+  'getComputedStyle',
+  'getSelection',
+  'scrollTo',
+  'scrollBy',
+  'matchMedia',
+  'DOMParser',
+  'Range',
+  'Selection',
+  'TreeWalker',
+  'NodeIterator',
+
+  // Window properties
+  'visualViewport',
+  'screenX',
+  'screenY',
+  'outerWidth',
+  'outerHeight',
+  'devicePixelRatio',
 
   // Other browser-specific
   'alert',
   'confirm',
   'prompt',
   'print',
-  'getComputedStyle',
-  'matchMedia',
   'atob',
   'btoa',
-  'queueMicrotask',
+  'Notification',
+  'Clipboard',
+]);
+
+/**
+ * Cross-environment globals — available in both browser and Node.js.
+ * Functions using ONLY these should be classified as Ambiguous, not ClientInteractive.
+ */
+export const AMBIGUOUS_GLOBALS = new Set([
+  'fetch',
   'structuredClone',
   'crypto',
   'performance',
-  'Notification',
-  'Clipboard',
+  'queueMicrotask',
+  'globalThis',
 ]);
 
 /**
@@ -158,6 +191,13 @@ export const PURE_GLOBALS = new Set([
  */
 export function isBrowserGlobal(name: string): boolean {
   return BROWSER_GLOBALS.has(name);
+}
+
+/**
+ * Check if an unresolved global reference is a cross-environment API.
+ */
+export function isAmbiguousGlobal(name: string): boolean {
+  return AMBIGUOUS_GLOBALS.has(name);
 }
 
 /**

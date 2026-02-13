@@ -34,8 +34,8 @@
     "lint": "eslint src/"
   },
   "dependencies": {
-    "astring": "^1.9.0",
     "eslint-scope": "^8.3.0",
+    "esrap": "^2.2.3",
     "oxc-parser": "^0.72.1",
     "unplugin": "^2.3.2"
   },

@@ -17,6 +17,8 @@ interface ClassificationInput {
   filePath: string;
   /** Index among siblings for disambiguation */
   index: number;
+  /** The AST node for this function (for JSX detection) */
+  astNode: Node | null;
 }
 
 /**
@@ -26,7 +28,7 @@ interface ClassificationInput {
  * it's an extraction candidate.
  */
 export function classifySegment(input: ClassificationInput): ClassifiedSegment {
-  const { fn, taint, purity, parentHook, sourceCode, filePath, index } = input;
+  const { fn, taint, purity, parentHook, sourceCode, filePath, index, astNode } = input;
   const codeSlice = sourceCode.slice(fn.span.start, fn.span.end);
   const id = generateSegmentId(filePath, codeSlice);
   const name = generateName(fn, filePath, index);
@@ -54,6 +56,12 @@ export function classifySegment(input: ClassificationInput): ClassifiedSegment {
     reasons.push(`Pure computation inside ${parentHook}`);
     reasons.push(...purity.reasons);
   }
+  // Rule 3.5: If function contains JSX, it's a React component — not extractable
+  else if (astNode && containsJSX(astNode)) {
+    classification = 'Shared';
+    confidence = 0.0;
+    reasons.push('React component (contains JSX) — not extractable');
+  }
   // Rule 4: If pure and a named helper function, it's server
   else if (purity.pure && fn.name !== '<anonymous>') {
     classification = 'ServerCompute';
@@ -68,7 +76,14 @@ export function classifySegment(input: ClassificationInput): ClassifiedSegment {
     reasons.push('Pure anonymous function — may be used in both contexts');
     reasons.push(...purity.reasons);
   }
-  // Rule 6: Unknown globals — ambiguous
+  // Rule 6a: Cross-environment globals (fetch, crypto, etc.) — ambiguous
+  else if (taint.ambiguousGlobals.length > 0) {
+    classification = 'Ambiguous';
+    confidence = 0.5;
+    reasons.push(`Cross-environment APIs: ${taint.ambiguousGlobals.join(', ')}`);
+    reasons.push('Available in both browser and Node.js — cannot determine intent');
+  }
+  // Rule 6b: Unknown globals — ambiguous
   else if (taint.unknownGlobals.length > 0) {
     classification = 'Ambiguous';
     confidence = 0.5;
@@ -109,4 +124,34 @@ function generateName(fn: FunctionDependency, filePath: string, index: number): 
     return `${base}_${fn.name}`;
   }
   return `${base}_anon_${index}`;
+}
+
+/**
+ * Check if an AST node contains any JSX elements or fragments.
+ * Functions containing JSX are React components and should not be extracted.
+ */
+function containsJSX(node: Node): boolean {
+  let found = false;
+  walkNodeLocal(node, (n) => {
+    if (found) return;
+    if ((n.type as string).startsWith('JSX')) found = true;
+  });
+  return found;
+}
+
+function walkNodeLocal(node: unknown, callback: (node: Node) => void): void {
+  if (!node || typeof node !== 'object') return;
+  if (Array.isArray(node)) {
+    for (const child of node) {
+      walkNodeLocal(child, callback);
+    }
+    return;
+  }
+  const obj = node as Record<string, unknown>;
+  if (typeof obj.type !== 'string') return;
+  callback(obj as unknown as Node);
+  for (const key of Object.keys(obj)) {
+    if (key === 'type') continue;
+    walkNodeLocal(obj[key], callback);
+  }
 }
