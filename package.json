@@ -1,0 +1,53 @@
+{
+  "name": "phantom-build",
+  "version": "0.0.1",
+  "description": "Automatic React bundle splitting — classifies server-compute vs client-interactive code and splits bundles at handler-level granularity",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./vite": {
+      "types": "./dist/vite.d.ts",
+      "import": "./dist/vite.js"
+    },
+    "./webpack": {
+      "types": "./dist/webpack.d.ts",
+      "import": "./dist/webpack.js"
+    },
+    "./runtime": {
+      "types": "./dist/runtime/index.d.ts",
+      "import": "./dist/runtime/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src/"
+  },
+  "dependencies": {
+    "astring": "^1.9.0",
+    "eslint-scope": "^8.3.0",
+    "oxc-parser": "^0.72.1",
+    "unplugin": "^2.3.2"
+  },
+  "devDependencies": {
+    "@types/eslint-scope": "^3.7.7",
+    "@types/estree": "^1.0.6",
+    "@types/node": "^25.2.3",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
