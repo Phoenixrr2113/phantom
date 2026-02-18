@@ -1,21 +1,22 @@
 import type { Node, Program } from 'estree';
 import { print } from 'esrap';
 import tsx from 'esrap/languages/tsx';
-import type { AnalyzedModule, ClassifiedSegment } from '../types.js';
+import type { AnalyzedModule, ClassifiedSegment, SourceMapLike } from '../types.js';
 import { resolveImports } from './import-resolver.js';
-import { generateServerModule } from './server-module.js';
+import { generateChunkModule } from './chunk-module.js';
 import { replaceWithStub, type ExtractableNode } from './client-stub.js';
 
 export interface ExtractionResult {
   clientCode: string;
-  serverModules: Array<{ id: string; code: string }>;
+  clientMap: SourceMapLike;
+  chunkModules: Array<{ id: string; code: string; map: SourceMapLike }>;
 }
 
 /**
- * Extract ServerCompute segments from a module.
+ * Extract EventHandler segments from a module into lazy-loaded chunks.
  *
  * Returns null if no segments qualify for extraction,
- * otherwise returns rewritten client code + server modules.
+ * otherwise returns rewritten client code + chunk modules.
  *
  * Uses proper AST-based codegen with esrap — no source text splicing.
  */
@@ -24,10 +25,11 @@ export function extractModule(
   segments: ClassifiedSegment[],
   _sourceCode: string,
   confidenceThreshold: number,
+  sourceFilePath: string,
 ): ExtractionResult | null {
   const extractable = segments.filter(
     (seg) =>
-      seg.classification === 'ServerCompute' &&
+      seg.classification === 'EventHandler' &&
       seg.confidence >= confidenceThreshold,
   );
 
@@ -36,11 +38,11 @@ export function extractModule(
   // Deep-copy the full AST for client code mutation
   const clientAST = structuredClone(analyzed.ast) as Program;
 
-  const serverModules: Array<{ id: string; code: string }> = [];
+  const chunkModules: Array<{ id: string; code: string; map: SourceMapLike }> = [];
   let extractedCount = 0;
 
   for (const segment of extractable) {
-    // Find the AST node in the ORIGINAL tree (for server module generation)
+    // Find the AST node in the ORIGINAL tree (for chunk module generation)
     const originalNode = findASTNode(analyzed.ast, segment.span);
     if (!originalNode) continue;
 
@@ -48,19 +50,21 @@ export function extractModule(
     const clientNode = findASTNode(clientAST, segment.span);
     if (!clientNode) continue;
 
-    // Separate captured vars from imports
-    const resolution = resolveImports(segment, analyzed);
+    // Separate captured vars from imports (rewrites relative paths to absolute)
+    const resolution = resolveImports(segment, analyzed, sourceFilePath);
 
-    // Generate the server module from the original (unmutated) AST
-    const serverCode = generateServerModule(
+    // Generate the chunk module from the original (unmutated) AST
+    const chunkResult = generateChunkModule(
       segment,
       originalNode,
       resolution.imports,
       resolution.capturedParams,
+      sourceFilePath,
+      _sourceCode,
     );
-    serverModules.push({ id: segment.id, code: serverCode });
+    chunkModules.push({ id: segment.id, code: chunkResult.code, map: chunkResult.map });
 
-    // Mutate the client AST node — replace function body with RPC stub
+    // Mutate the client AST node — replace function body with lazy stub
     replaceWithStub(clientNode, segment, resolution.capturedParams);
 
     extractedCount++;
@@ -68,23 +72,26 @@ export function extractModule(
 
   if (extractedCount === 0) return null;
 
-  // Prepend `import { __phantom_rpc } from 'phantom-build/runtime'` to the client AST
-  const rpcImport = {
+  // Prepend `import { __phantom_lazy } from 'phantom-build/runtime'` to the client AST
+  const lazyImport = {
     type: 'ImportDeclaration' as const,
     specifiers: [{
       type: 'ImportSpecifier' as const,
-      imported: { type: 'Identifier' as const, name: '__phantom_rpc' },
-      local: { type: 'Identifier' as const, name: '__phantom_rpc' },
+      imported: { type: 'Identifier' as const, name: '__phantom_lazy' },
+      local: { type: 'Identifier' as const, name: '__phantom_lazy' },
     }],
     source: { type: 'Literal' as const, value: 'phantom-build/runtime' },
   };
-  clientAST.body.unshift(rpcImport as Program['body'][number]);
+  clientAST.body.unshift(lazyImport as Program['body'][number]);
 
-  // Generate client code with esrap
+  // Generate client code with esrap (including source map)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- esrap tsx visitors expect TSESTree.Node, OXC produces compatible estree nodes
-  const result = print(clientAST as any, tsx() as any);
+  const result = print(clientAST as any, tsx() as any, {
+    sourceMapSource: sourceFilePath,
+    sourceMapContent: _sourceCode,
+  });
 
-  return { clientCode: result.code, serverModules };
+  return { clientCode: result.code, clientMap: result.map, chunkModules };
 }
 
 // ── AST helpers ──────────────────────────────────────────────────────────

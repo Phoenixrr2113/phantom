@@ -8,7 +8,7 @@ interface User {
   lastActive: number;
 }
 
-// Pure arrow helper — should be ServerCompute (named, no browser globals)
+// Pure arrow helper — should be PureComputation (named, no browser globals)
 const formatDate = (timestamp: number) => {
   const d = new Date(timestamp);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -43,7 +43,7 @@ export function UserDashboard({ users }: { users: User[] }) {
     navigateToUser(userId);
   }, []);
 
-  // This component returns JSX — it must NOT be ServerCompute
+  // This component returns JSX — it must NOT be PureComputation
   return (
     <div>
       <h2>Admins ({admins.length})</h2>

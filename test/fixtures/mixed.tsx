@@ -9,12 +9,12 @@ interface Item {
 export function MixedComponent({ items }: { items: Item[] }) {
   const [filter, setFilter] = useState('');
 
-  // Pure computation — server candidate
+  // Pure computation — stays in main bundle
   const total = useMemo(() => {
     return items.reduce((sum, item) => sum + item.value, 0);
   }, [items]);
 
-  // Pure computation — server candidate
+  // Pure computation — stays in main bundle
   const filtered = useMemo(() => {
     return items
       .filter(item => item.name.toLowerCase().includes(filter.toLowerCase()))
@@ -37,7 +37,7 @@ export function MixedComponent({ items }: { items: Item[] }) {
     console.log(data);
   }, []);
 
-  // Pure formatting helper — server candidate
+  // Pure formatting helper — stays in main bundle
   const formatValue = (value: number) => {
     return `$${value.toFixed(2)}`;
   };

@@ -22,22 +22,22 @@ describe('classification engine', () => {
   describe('pure-memo.tsx', () => {
     const getResult = () => analyzeModule(fixture('pure-memo.tsx'), 'pure-memo.tsx');
 
-    it('ProductPage is NOT ServerCompute (contains JSX)', () => {
+    it('ProductPage is NOT PureComputation (contains JSX)', () => {
       const result = getResult();
       const page = segByName(result.segments, 'ProductPage');
       expect(page).toBeDefined();
-      expect(page!.classification).not.toBe('ServerCompute');
+      expect(page!.classification).not.toBe('PureComputation');
       expect(page!.classification).toBe('Shared');
       expect(page!.confidence).toBe(0.0);
       expect(page!.reasons).toContain('React component (contains JSX) — not extractable');
     });
 
-    it('useMemo callback is ServerCompute with confidence >= 0.9', () => {
+    it('useMemo callback is PureComputation with confidence >= 0.9', () => {
       const result = getResult();
-      const serverSegments = segsByClass(result.segments, 'ServerCompute');
-      expect(serverSegments.length).toBe(1);
-      expect(serverSegments[0].confidence).toBeGreaterThanOrEqual(0.9);
-      expect(serverSegments[0].reasons).toContain('Pure computation inside useMemo');
+      const pureSegments = segsByClass(result.segments, 'PureComputation');
+      expect(pureSegments.length).toBe(1);
+      expect(pureSegments[0].confidence).toBeGreaterThanOrEqual(0.9);
+      expect(pureSegments[0].reasons).toContain('Pure computation inside useMemo');
     });
 
     it('inner lambdas (.filter, .sort, .map) are Shared', () => {
@@ -54,53 +54,55 @@ describe('classification engine', () => {
   describe('event-handler.tsx', () => {
     const getResult = () => analyzeModule(fixture('event-handler.tsx'), 'event-handler.tsx');
 
-    it('handleClick is ClientInteractive referencing window', () => {
+    it('handleClick is EventHandler for onClick', () => {
       const result = getResult();
       const handleClick = segByName(result.segments, 'handleClick');
       expect(handleClick).toBeDefined();
-      expect(handleClick!.classification).toBe('ClientInteractive');
-      expect(handleClick!.reasons.some(r => r.includes('window'))).toBe(true);
+      expect(handleClick!.classification).toBe('EventHandler');
+      expect(handleClick!.reasons.some(r => r.includes('onClick'))).toBe(true);
     });
 
-    it('handleFocus is ClientInteractive referencing document', () => {
+    it('handleFocus is EventHandler for onFocus', () => {
       const result = getResult();
       const handleFocus = segByName(result.segments, 'handleFocus');
       expect(handleFocus).toBeDefined();
-      expect(handleFocus!.classification).toBe('ClientInteractive');
-      expect(handleFocus!.reasons.some(r => r.includes('document'))).toBe(true);
+      expect(handleFocus!.classification).toBe('EventHandler');
+      expect(handleFocus!.reasons.some(r => r.includes('onFocus'))).toBe(true);
     });
 
-    it('handleScroll is ClientInteractive referencing window and localStorage', () => {
+    it('handleScroll is EventHandler for onClick', () => {
       const result = getResult();
       const handleScroll = segByName(result.segments, 'handleScroll');
       expect(handleScroll).toBeDefined();
-      expect(handleScroll!.classification).toBe('ClientInteractive');
-      expect(handleScroll!.reasons.some(r => r.includes('window'))).toBe(true);
-      expect(handleScroll!.reasons.some(r => r.includes('localStorage'))).toBe(true);
+      expect(handleScroll!.classification).toBe('EventHandler');
+      expect(handleScroll!.reasons.some(r => r.includes('onClick'))).toBe(true);
     });
 
-    it('has no ServerCompute segments', () => {
+    it('has EventHandler segments and extractions', () => {
       const result = getResult();
-      const serverSegments = segsByClass(result.segments, 'ServerCompute');
-      expect(serverSegments).toEqual([]);
-      expect(result.hasServerExtractions).toBe(false);
+      const eventHandlers = segsByClass(result.segments, 'EventHandler');
+      expect(eventHandlers.length).toBeGreaterThanOrEqual(3);
+      expect(result.hasExtractions).toBe(true);
     });
 
-    it('InteractiveComponent is ClientInteractive', () => {
+    it('InteractiveComponent is ClientInteractive (contains JSX + browser globals)', () => {
       const result = getResult();
       const component = segByName(result.segments, 'InteractiveComponent');
       expect(component).toBeDefined();
-      expect(component!.classification).toBe('ClientInteractive');
+      // The component itself touches browser globals via taint propagation
+      // but also contains JSX, so it could be ClientInteractive or Shared
+      expect(component!.classification).not.toBe('EventHandler');
+      expect(component!.classification).not.toBe('PureComputation');
     });
   });
 
   describe('mixed.tsx', () => {
     const getResult = () => analyzeModule(fixture('mixed.tsx'), 'mixed.tsx');
 
-    it('useMemo callbacks are ServerCompute', () => {
+    it('useMemo callbacks are PureComputation', () => {
       const result = getResult();
-      const serverSegments = segsByClass(result.segments, 'ServerCompute');
-      const memoCallbacks = serverSegments.filter(
+      const pureSegments = segsByClass(result.segments, 'PureComputation');
+      const memoCallbacks = pureSegments.filter(
         s => s.reasons.some(r => r.includes('useMemo'))
       );
       expect(memoCallbacks.length).toBe(2);
@@ -119,20 +121,23 @@ describe('classification engine', () => {
       expect(effectCallback!.confidence).toBe(1.0);
     });
 
-    it('handleSubmit callback is ClientInteractive (browser DOM APIs)', () => {
+    it('handleSubmit useCallback callback is EventHandler for onSubmit', () => {
       const result = getResult();
-      const submitCallback = result.segments.find(
-        s => s.reasons.some(r => r.includes('FormData') || r.includes('HTMLFormElement'))
+      // The inner callback of useCallback((e) => { e.preventDefault()... })
+      // should be classified as EventHandler because handleSubmit is used as onSubmit={handleSubmit}
+      const eventHandlers = segsByClass(result.segments, 'EventHandler');
+      const submitHandler = eventHandlers.find(
+        s => s.reasons.some(r => r.includes('onSubmit'))
       );
-      expect(submitCallback).toBeDefined();
-      expect(submitCallback!.classification).toBe('ClientInteractive');
+      expect(submitHandler).toBeDefined();
+      expect(submitHandler!.confidence).toBe(0.9);
     });
 
-    it('formatValue is ServerCompute (pure named helper)', () => {
+    it('formatValue is PureComputation (pure named helper)', () => {
       const result = getResult();
       const formatValue = segByName(result.segments, 'formatValue');
       expect(formatValue).toBeDefined();
-      expect(formatValue!.classification).toBe('ServerCompute');
+      expect(formatValue!.classification).toBe('PureComputation');
       expect(formatValue!.confidence).toBe(0.85);
       expect(formatValue!.reasons).toContain('Pure named helper function');
     });
@@ -156,7 +161,7 @@ describe('classification engine', () => {
   });
 
   describe('inline code', () => {
-    it('classifies pure helper as ServerCompute', () => {
+    it('classifies pure helper as PureComputation', () => {
       const code = `
         function formatPrice(price) {
           return '$' + price.toFixed(2);
@@ -165,9 +170,9 @@ describe('classification engine', () => {
       `;
       const result = analyzeModule(code, 'format.ts');
 
-      const serverSegments = segsByClass(result.segments, 'ServerCompute');
-      expect(serverSegments.length).toBe(1);
-      expect(serverSegments[0].name).toContain('formatPrice');
+      const pureSegments = segsByClass(result.segments, 'PureComputation');
+      expect(pureSegments.length).toBe(1);
+      expect(pureSegments[0].name).toContain('formatPrice');
     });
 
     it('classifies DOM-touching function as ClientInteractive', () => {
@@ -219,10 +224,10 @@ describe('classification engine', () => {
     it('classifies empty module with no segments', () => {
       const result = analyzeModule('const x = 1;', 'empty.ts');
       expect(result.segments).toEqual([]);
-      expect(result.hasServerExtractions).toBe(false);
+      expect(result.hasExtractions).toBe(false);
     });
 
-    it('JSX component is NOT ServerCompute', () => {
+    it('JSX component is NOT PureComputation', () => {
       const code = `
         function Greeting({ name }) {
           return <h1>Hello {name}</h1>;
@@ -232,7 +237,7 @@ describe('classification engine', () => {
       const result = analyzeModule(code, 'greeting.tsx');
       const greeting = segByName(result.segments, 'Greeting');
       expect(greeting).toBeDefined();
-      expect(greeting!.classification).not.toBe('ServerCompute');
+      expect(greeting!.classification).not.toBe('PureComputation');
       expect(greeting!.classification).toBe('Shared');
       expect(greeting!.reasons).toContain('React component (contains JSX) — not extractable');
     });
@@ -274,7 +279,7 @@ describe('classification engine', () => {
         s => s.reasons.some(r => r.includes('useMemo'))
       );
       expect(memoCallback).toBeDefined();
-      expect(memoCallback!.classification).toBe('ServerCompute');
+      expect(memoCallback!.classification).toBe('PureComputation');
       expect(memoCallback!.confidence).toBeGreaterThanOrEqual(0.9);
     });
 
@@ -293,6 +298,35 @@ describe('classification engine', () => {
       expect(fetchFn!.classification).toBe('Ambiguous');
       expect(fetchFn!.reasons.some(r => r.includes('fetch'))).toBe(true);
     });
+
+    it('function used as event handler AND in render is NOT EventHandler (exclusive-use)', () => {
+      const code = `
+        import React from 'react';
+        function App() {
+          const doStuff = () => { console.log('stuff'); };
+          doStuff(); // called in render too
+          return <button onClick={doStuff}>Click</button>;
+        }
+      `;
+      const result = analyzeModule(code, 'dual-use.tsx');
+
+      const doStuff = segByName(result.segments, 'doStuff');
+      expect(doStuff).toBeDefined();
+      expect(doStuff!.classification).not.toBe('EventHandler');
+    });
+
+    it('inline arrow event handler is EventHandler', () => {
+      const code = `
+        import React from 'react';
+        function App() {
+          return <button onClick={() => { window.alert('hi'); }}>Click</button>;
+        }
+      `;
+      const result = analyzeModule(code, 'inline-handler.tsx');
+
+      const eventHandlers = segsByClass(result.segments, 'EventHandler');
+      expect(eventHandlers.length).toBeGreaterThanOrEqual(1);
+    });
   });
 
   describe('component-with-helpers.tsx', () => {
@@ -301,20 +335,20 @@ describe('classification engine', () => {
       'component-with-helpers.tsx'
     );
 
-    it('UserDashboard (contains JSX) is NOT ServerCompute', () => {
+    it('UserDashboard (contains JSX) is NOT PureComputation', () => {
       const result = getResult();
       const dashboard = segByName(result.segments, 'UserDashboard');
       expect(dashboard).toBeDefined();
-      expect(dashboard!.classification).not.toBe('ServerCompute');
+      expect(dashboard!.classification).not.toBe('PureComputation');
       // May be ClientInteractive (taint from navigateToUser) or Shared (JSX) —
-      // either way, never ServerCompute
+      // either way, never PureComputation
     });
 
-    it('formatDate is ServerCompute (pure named arrow helper)', () => {
+    it('formatDate is PureComputation (pure named arrow helper)', () => {
       const result = getResult();
       const formatDate = segByName(result.segments, 'formatDate');
       expect(formatDate).toBeDefined();
-      expect(formatDate!.classification).toBe('ServerCompute');
+      expect(formatDate!.classification).toBe('PureComputation');
       expect(formatDate!.confidence).toBe(0.85);
     });
 
@@ -333,24 +367,24 @@ describe('classification engine', () => {
       expect(navigateToUser!.classification).toBe('ClientInteractive');
     });
 
-    it('React.useMemo callback is ServerCompute (namespace call)', () => {
+    it('React.useMemo callback is PureComputation (namespace call)', () => {
       const result = getResult();
       // Find the useMemo callback for admins
       const memoCallbacks = result.segments.filter(
-        s => s.classification === 'ServerCompute' &&
+        s => s.classification === 'PureComputation' &&
           s.reasons.some(r => r.includes('useMemo'))
       );
       expect(memoCallbacks.length).toBeGreaterThanOrEqual(1);
     });
 
-    it('both useMemo callbacks are ServerCompute', () => {
+    it('both useMemo callbacks are PureComputation', () => {
       const result = getResult();
       const memoCallbacks = result.segments.filter(
         s => s.reasons.some(r => r.includes('useMemo'))
       );
       expect(memoCallbacks.length).toBe(2);
       for (const seg of memoCallbacks) {
-        expect(seg.classification).toBe('ServerCompute');
+        expect(seg.classification).toBe('PureComputation');
         expect(seg.confidence).toBeGreaterThanOrEqual(0.9);
       }
     });

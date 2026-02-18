@@ -1,7 +1,7 @@
 import { parseSync } from 'oxc-parser';
 import { analyze as analyzeScope } from 'eslint-scope';
 import type { Program, Node } from 'estree';
-import { addRanges } from './ast-compat.js';
+import { addASTMetadata } from './ast-compat.js';
 import { classifyModule } from './classify/index.js';
 import { extractModule } from './extract/index.js';
 import type {
@@ -34,10 +34,16 @@ export function parseModule(code: string, path: string): AnalyzedModule {
     astType: 'js', // ESTree-compatible output (strips TS-specific nodes)
   });
 
+  // Bail early on parse errors — partial ASTs cause cryptic downstream failures
+  if (parseResult.errors.length > 0) {
+    const errMsg = parseResult.errors.map((e: { message: string }) => e.message).join(', ');
+    throw new Error(`[phantom] Parse errors in ${path}: ${errMsg}`);
+  }
+
   const ast = parseResult.program as unknown as Program;
 
-  // 2. Patch AST for eslint-scope compatibility (add range: [start, end])
-  addRanges(ast);
+  // 2. Patch AST for eslint-scope + esrap (add range + loc)
+  addASTMetadata(ast, code);
 
   // 3. Run eslint-scope for scope/symbol resolution
   // eslint-scope supports `jsx` but the type definitions don't declare it
@@ -302,23 +308,22 @@ export function analyzeModule(
 
   // Phase 4: extraction
   const confidenceThreshold = _options?.confidenceThreshold ?? 0.8;
-  const extracted = extractModule(parsed, segments, code, confidenceThreshold);
+  const extracted = extractModule(parsed, segments, code, confidenceThreshold, path);
 
   if (extracted) {
     return {
       path,
       segments,
-      hasServerExtractions: true,
+      hasExtractions: true,
       clientCode: extracted.clientCode,
-      serverModules: extracted.serverModules,
+      clientMap: extracted.clientMap,
+      chunkModules: extracted.chunkModules,
     };
   }
 
   return {
     path,
     segments,
-    hasServerExtractions: segments.some(
-      (s) => s.classification === 'ServerCompute',
-    ),
+    hasExtractions: false,
   };
 }

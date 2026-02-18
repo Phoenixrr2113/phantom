@@ -94,8 +94,6 @@ export const BROWSER_GLOBALS = new Set([
   'confirm',
   'prompt',
   'print',
-  'atob',
-  'btoa',
   'Notification',
   'Clipboard',
 ]);
@@ -111,12 +109,24 @@ export const AMBIGUOUS_GLOBALS = new Set([
   'performance',
   'queueMicrotask',
   'globalThis',
+
+  // Timers — available in both browser and Node.js
+  'setTimeout',
+  'clearTimeout',
+  'setInterval',
+  'clearInterval',
+  'setImmediate',
+  'clearImmediate',
+
+  // Encoding — available in Node.js since v16
+  'atob',
+  'btoa',
 ]);
 
 /**
  * "Safe" globals that are pure computation — NOT browser-specific.
  * These exist in all JS environments (Node.js, Deno, browsers).
- * Functions referencing ONLY these are still server-compute candidates.
+ * Functions referencing ONLY these are still PureComputation candidates.
  */
 export const PURE_GLOBALS = new Set([
   // Math & Numbers

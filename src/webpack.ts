@@ -1,1 +1,2 @@
-export { phantom as default } from './plugin.js';
+import { phantom } from './plugin.js';
+export default phantom.webpack;

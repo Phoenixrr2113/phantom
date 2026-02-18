@@ -1,0 +1,449 @@
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { parseSync } from 'oxc-parser';
+import { phantom, VIRTUAL_PREFIX, PUBLIC_PREFIX } from '../src/index.js';
+
+function fixture(name: string): string {
+  return readFileSync(join(__dirname, 'fixtures', name), 'utf-8');
+}
+
+// ── Helpers ─────────────────────────────────────────────────────────────
+
+/**
+ * Create a raw plugin instance with fresh state.
+ * `phantom.raw` returns the UnpluginOptions object so we can call hooks directly.
+ */
+function createPlugin(opts = {}) {
+  return phantom.raw(opts, { framework: 'vite' });
+}
+
+/** Minimal mock context for unplugin hooks that need `this` */
+const mockContext = {
+  addWatchFile: () => {},
+  emitFile: () => {},
+  getWatchFiles: () => [] as string[],
+  parse: () => ({}) as any,
+  error: () => {},
+  warn: () => {},
+} as any;
+
+// ── Tests ───────────────────────────────────────────────────────────────
+
+describe('phantom unplugin', () => {
+  describe('transformInclude', () => {
+    const plugin = createPlugin();
+
+    it('includes .tsx files', () => {
+      expect(plugin.transformInclude!('src/App.tsx')).toBe(true);
+    });
+
+    it('includes .ts files', () => {
+      expect(plugin.transformInclude!('src/utils.ts')).toBe(true);
+    });
+
+    it('includes .jsx files', () => {
+      expect(plugin.transformInclude!('src/Component.jsx')).toBe(true);
+    });
+
+    it('includes .js files', () => {
+      expect(plugin.transformInclude!('src/helper.js')).toBe(true);
+    });
+
+    it('excludes node_modules', () => {
+      expect(plugin.transformInclude!('node_modules/react/index.js')).toBe(false);
+    });
+
+    it('excludes .css files', () => {
+      expect(plugin.transformInclude!('src/styles.css')).toBe(false);
+    });
+
+    it('excludes .json files', () => {
+      expect(plugin.transformInclude!('package.json')).toBe(false);
+    });
+  });
+
+  describe('transform', () => {
+    it('returns null for client-only code (no extractions)', () => {
+      const plugin = createPlugin();
+      const code = `
+        import { useEffect } from 'react';
+        function App() {
+          useEffect(() => { document.title = 'Hello'; }, []);
+          return null;
+        }
+      `;
+      const result = (plugin.transform as Function).call(mockContext, code, 'app.tsx');
+      expect(result).toBeNull();
+    });
+
+    it('returns rewritten client code for extractable module (event handlers)', () => {
+      const plugin = createPlugin();
+      const code = fixture('event-handler.tsx');
+      const result = (plugin.transform as Function).call(mockContext, code, 'event-handler.tsx');
+
+      expect(result).not.toBeNull();
+      expect(result.code).toBeDefined();
+      expect(result.code).toContain('__phantom_lazy');
+      // Source map is now a real map object (not null)
+      expect(result.map).toBeDefined();
+      expect(result.map.version).toBe(3);
+      expect(result.map.mappings.length).toBeGreaterThan(0);
+    });
+
+    it('returns null for pure-only module (no event handlers)', () => {
+      const plugin = createPlugin();
+      const code = fixture('pure-memo.tsx');
+      const result = (plugin.transform as Function).call(mockContext, code, 'pure-memo.tsx');
+      // pure-memo.tsx has no event handlers, so no extraction
+      expect(result).toBeNull();
+    });
+
+    it('client code does NOT contain extracted handler logic', () => {
+      const plugin = createPlugin();
+      const code = fixture('event-handler.tsx');
+      const result = (plugin.transform as Function).call(mockContext, code, 'event-handler.tsx');
+
+      // The handler bodies should be replaced with lazy stubs
+      expect(result.code).toContain('__phantom_lazy');
+      // Client should still have the component structure
+      expect(result.code).toContain('InteractiveComponent');
+    });
+  });
+
+  describe('resolveId', () => {
+    const plugin = createPlugin();
+
+    it('resolves phantom: prefixed IDs by adding \\0', () => {
+      const result = (plugin.resolveId as Function).call(
+        mockContext,
+        'phantom:seg_abc123.chunk.js',
+        undefined,
+        { isEntry: false },
+      );
+      expect(result).toBe('\0phantom:seg_abc123.chunk.js');
+    });
+
+    it('passes through \\0phantom: prefixed IDs (already resolved)', () => {
+      const result = (plugin.resolveId as Function).call(
+        mockContext,
+        '\0phantom:seg_abc123.chunk.js',
+        undefined,
+        { isEntry: false },
+      );
+      expect(result).toBe('\0phantom:seg_abc123.chunk.js');
+    });
+
+    it('returns null for non-phantom IDs', () => {
+      const result = (plugin.resolveId as Function).call(
+        mockContext,
+        'react',
+        undefined,
+        { isEntry: false },
+      );
+      expect(result).toBeNull();
+    });
+
+    it('returns null for regular file paths', () => {
+      const result = (plugin.resolveId as Function).call(
+        mockContext,
+        './utils.ts',
+        'src/app.tsx',
+        { isEntry: false },
+      );
+      expect(result).toBeNull();
+    });
+  });
+
+  describe('load', () => {
+    it('returns chunk code for known virtual module IDs', () => {
+      const plugin = createPlugin();
+      // First, transform to populate chunkModuleMap
+      const code = fixture('event-handler.tsx');
+      const transformResult = (plugin.transform as Function).call(
+        mockContext,
+        code,
+        'event-handler.tsx',
+      );
+      expect(transformResult).not.toBeNull();
+
+      // Extract the segment ID from the import factory in the lazy call
+      // Pattern: import('phantom:seg_xxx.chunk.js')
+      const lazyMatch = transformResult.code.match(/import\('phantom:([^']+)\.chunk\.js'\)/);
+      expect(lazyMatch).not.toBeNull();
+      const segId = lazyMatch![1];
+
+      // Load the virtual module
+      const virtualId = `${VIRTUAL_PREFIX}${segId}.chunk.js`;
+      const loadResult = (plugin.load as Function).call(mockContext, virtualId);
+      expect(loadResult).toBeDefined();
+      expect(loadResult.code).toBeDefined();
+      expect(loadResult.code).toContain('export function');
+      expect(loadResult.map).toBeDefined();
+      expect(loadResult.map.version).toBe(3);
+    });
+
+    it('returns undefined for unknown virtual IDs', () => {
+      const plugin = createPlugin();
+      const result = (plugin.load as Function).call(
+        mockContext,
+        `${VIRTUAL_PREFIX}nonexistent.chunk.js`,
+      );
+      expect(result).toBeUndefined();
+    });
+
+    it('returns undefined for non-phantom IDs', () => {
+      const plugin = createPlugin();
+      const result = (plugin.load as Function).call(mockContext, './utils.ts');
+      expect(result).toBeUndefined();
+    });
+  });
+
+  describe('end-to-end flow', () => {
+    it('transform → resolveId → load produces parseable chunk modules', () => {
+      const plugin = createPlugin();
+      const code = fixture('event-handler.tsx');
+
+      // Step 1: Transform
+      const transformResult = (plugin.transform as Function).call(
+        mockContext,
+        code,
+        'event-handler.tsx',
+      );
+      expect(transformResult).not.toBeNull();
+
+      // Step 2: Extract segment IDs from import factories in client code
+      const lazyCalls = [...transformResult.code.matchAll(/import\('phantom:([^']+)\.chunk\.js'\)/g)];
+      expect(lazyCalls.length).toBeGreaterThan(0);
+
+      for (const match of lazyCalls) {
+        const segId = match[1];
+
+        // Step 3: Resolve the virtual module
+        const publicId = `phantom:${segId}.chunk.js`;
+        const resolvedId = (plugin.resolveId as Function).call(
+          mockContext,
+          publicId,
+          'event-handler.tsx',
+          { isEntry: false },
+        );
+        expect(resolvedId).toBe(`\0${publicId}`);
+
+        // Step 4: Load the chunk module code
+        const loadResult = (plugin.load as Function).call(mockContext, resolvedId);
+        expect(loadResult).toBeDefined();
+        expect(loadResult.code).toBeDefined();
+        expect(loadResult.map).toBeDefined();
+
+        // Step 5: Verify the chunk code is parseable JavaScript
+        const parsed = parseSync('chunk.js', loadResult.code, {
+          lang: 'js',
+          sourceType: 'module',
+        });
+        expect(parsed.errors.length).toBe(0);
+      }
+    });
+
+    it('client code is parseable TSX', () => {
+      const plugin = createPlugin();
+      const code = fixture('event-handler.tsx');
+      const result = (plugin.transform as Function).call(mockContext, code, 'event-handler.tsx');
+
+      const parsed = parseSync('client.tsx', result.code, {
+        lang: 'tsx',
+        sourceType: 'module',
+      });
+      expect(parsed.errors.length).toBe(0);
+    });
+
+    it('mixed.tsx produces chunk modules via load', () => {
+      const plugin = createPlugin();
+      const code = fixture('mixed.tsx');
+      const result = (plugin.transform as Function).call(mockContext, code, 'mixed.tsx');
+      expect(result).not.toBeNull();
+
+      const lazyCalls = [...result.code.matchAll(/import\('phantom:([^']+)\.chunk\.js'\)/g)];
+      expect(lazyCalls.length).toBeGreaterThanOrEqual(1);
+
+      let loadedCount = 0;
+      for (const match of lazyCalls) {
+        const segId = match[1];
+        const virtualId = `${VIRTUAL_PREFIX}${segId}.chunk.js`;
+        const loadResult = (plugin.load as Function).call(mockContext, virtualId);
+        if (loadResult) {
+          loadedCount++;
+          // Each should be parseable
+          const parsed = parseSync('chunk.js', loadResult.code, {
+            lang: 'js',
+            sourceType: 'module',
+          });
+          expect(parsed.errors.length).toBe(0);
+        }
+      }
+      expect(loadedCount).toBeGreaterThanOrEqual(1);
+    });
+
+    it('pure-memo.tsx produces no chunk modules', () => {
+      const plugin = createPlugin();
+      const code = fixture('pure-memo.tsx');
+      const result = (plugin.transform as Function).call(
+        mockContext,
+        code,
+        'pure-memo.tsx',
+      );
+      // No event handlers → no extraction
+      expect(result).toBeNull();
+    });
+  });
+
+  describe('virtual module constants', () => {
+    it('VIRTUAL_PREFIX starts with \\0', () => {
+      expect(VIRTUAL_PREFIX).toBe('\0phantom:');
+    });
+
+    it('PUBLIC_PREFIX has no \\0', () => {
+      expect(PUBLIC_PREFIX).toBe('phantom:');
+    });
+  });
+
+  describe('production readiness', () => {
+    it('buildStart clears state for watch mode (no stale chunks)', () => {
+      const plugin = createPlugin();
+
+      // First build: transform a file to populate chunk state
+      const code = fixture('event-handler.tsx');
+      const result1 = (plugin.transform as Function).call(mockContext, code, 'event-handler.tsx');
+      expect(result1).not.toBeNull();
+
+      // Extract a segment ID
+      const match1 = result1.code.match(/import\('phantom:([^']+)\.chunk\.js'\)/);
+      expect(match1).not.toBeNull();
+      const segId1 = match1![1];
+
+      // Verify chunk is loadable (returns { code, map } object)
+      const virtualId1 = `${VIRTUAL_PREFIX}${segId1}.chunk.js`;
+      const loaded = (plugin.load as Function).call(mockContext, virtualId1);
+      expect(loaded).toBeDefined();
+      expect(loaded.code).toContain('export function');
+
+      // Simulate watch mode rebuild: buildStart should clear all state
+      (plugin.buildStart as Function).call(mockContext);
+
+      // After reset, the old chunk should no longer be loadable
+      expect((plugin.load as Function).call(mockContext, virtualId1)).toBeUndefined();
+    });
+
+    it('re-transform cleans up stale chunks from previous version (HMR)', () => {
+      const plugin = createPlugin();
+
+      // First transform: extract handlers from event-handler.tsx
+      const code1 = fixture('event-handler.tsx');
+      const result1 = (plugin.transform as Function).call(mockContext, code1, '/src/App.tsx');
+      expect(result1).not.toBeNull();
+
+      // Collect all chunk IDs from first transform
+      const matches1 = [...result1.code.matchAll(/import\('phantom:([^']+)\.chunk\.js'\)/g)];
+      const oldVirtualIds = matches1.map((m) => `${VIRTUAL_PREFIX}${m[1]}.chunk.js`);
+      expect(oldVirtualIds.length).toBeGreaterThan(0);
+
+      // Verify old chunks are loadable
+      for (const vid of oldVirtualIds) {
+        expect((plugin.load as Function).call(mockContext, vid)).toBeDefined();
+      }
+
+      // Second transform: same file path, different code (produces different chunks)
+      const code2 = `
+import React from 'react';
+function App() {
+  const handler = () => { window.alert('new version'); };
+  return <button onClick={handler}>New</button>;
+}
+      `;
+      const result2 = (plugin.transform as Function).call(mockContext, code2, '/src/App.tsx');
+      expect(result2).not.toBeNull();
+
+      // Old chunks should be gone
+      for (const vid of oldVirtualIds) {
+        expect((plugin.load as Function).call(mockContext, vid)).toBeUndefined();
+      }
+
+      // New chunks should be loadable
+      const matches2 = [...result2.code.matchAll(/import\('phantom:([^']+)\.chunk\.js'\)/g)];
+      const newVirtualIds = matches2.map((m) => `${VIRTUAL_PREFIX}${m[1]}.chunk.js`);
+      expect(newVirtualIds.length).toBeGreaterThan(0);
+      for (const vid of newVirtualIds) {
+        expect((plugin.load as Function).call(mockContext, vid)).toBeDefined();
+      }
+    });
+
+    it('transform gracefully handles syntax errors (returns null, does not crash)', () => {
+      const plugin = createPlugin();
+      const badCode = 'const x = {;'; // syntax error
+      const result = (plugin.transform as Function).call(mockContext, badCode, 'bad.tsx');
+      // Should return null (skip), not throw
+      expect(result).toBeNull();
+    });
+  });
+
+  describe('build summary', () => {
+    it('prints summary with handler names and module counts', () => {
+      const plugin = createPlugin();
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+      // Transform a file with extractable handlers
+      const code = fixture('event-handler.tsx');
+      (plugin.transform as Function).call(mockContext, code, '/project/src/event-handler.tsx');
+
+      // Also transform a file with no extractions
+      const pureCode = fixture('pure-memo.tsx');
+      (plugin.transform as Function).call(mockContext, pureCode, '/project/src/pure-memo.tsx');
+
+      // Call buildEnd to trigger summary
+      (plugin.buildEnd as Function).call(mockContext);
+
+      expect(logSpy).toHaveBeenCalled();
+      const output = logSpy.mock.calls.map((c) => c[0]).join('\n');
+
+      expect(output).toContain('[phantom] Build complete');
+      expect(output).toContain('Modules scanned: 2');
+      expect(output).toContain('from 1 module');
+      expect(output).toContain('event-handler.tsx');
+      expect(output).toContain('Manifest:');
+
+      logSpy.mockRestore();
+    });
+
+    it('silent option suppresses build summary', () => {
+      const plugin = createPlugin({ silent: true });
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+      const code = fixture('event-handler.tsx');
+      (plugin.transform as Function).call(mockContext, code, '/project/src/event-handler.tsx');
+      (plugin.buildEnd as Function).call(mockContext);
+
+      // log should NOT be called with phantom summary
+      const phantomCalls = logSpy.mock.calls.filter(
+        (c) => typeof c[0] === 'string' && c[0].includes('[phantom]'),
+      );
+      expect(phantomCalls.length).toBe(0);
+
+      logSpy.mockRestore();
+    });
+
+    it('prints minimal summary when no handlers extracted', () => {
+      const plugin = createPlugin();
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+      // Transform only a pure module — no extractions
+      const code = fixture('pure-memo.tsx');
+      (plugin.transform as Function).call(mockContext, code, '/project/src/pure-memo.tsx');
+      (plugin.buildEnd as Function).call(mockContext);
+
+      expect(logSpy).toHaveBeenCalled();
+      const output = logSpy.mock.calls.map((c) => c[0]).join('\n');
+      expect(output).toContain('no handlers extracted');
+
+      logSpy.mockRestore();
+    });
+  });
+});

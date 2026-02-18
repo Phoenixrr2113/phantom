@@ -11,6 +11,8 @@ interface ClassificationInput {
   purity: PurityResult;
   /** The parent call expression name, if this is a hook callback */
   parentHook: string | null;
+  /** The JSX event prop name, if this function is used exclusively as an event handler */
+  parentEventProp: string | null;
   /** Source code for content hashing */
   sourceCode: string;
   /** File path for naming */
@@ -28,7 +30,7 @@ interface ClassificationInput {
  * it's an extraction candidate.
  */
 export function classifySegment(input: ClassificationInput): ClassifiedSegment {
-  const { fn, taint, purity, parentHook, sourceCode, filePath, index, astNode } = input;
+  const { fn, taint, purity, parentHook, parentEventProp, sourceCode, filePath, index, astNode } = input;
   const codeSlice = sourceCode.slice(fn.span.start, fn.span.end);
   const id = generateSegmentId(filePath, codeSlice);
   const name = generateName(fn, filePath, index);
@@ -37,8 +39,16 @@ export function classifySegment(input: ClassificationInput): ClassifiedSegment {
   let confidence: number;
   const reasons: string[] = [];
 
+  // Rule 0: If used exclusively as a JSX event handler prop, it's an event handler
+  // This fires before taint analysis because event handlers are extracted regardless
+  // of whether they touch browser APIs (they all do — that's the point)
+  if (parentEventProp) {
+    classification = 'EventHandler';
+    confidence = 0.9;
+    reasons.push(`Event handler for ${parentEventProp}`);
+  }
   // Rule 1: If inside a client-only hook (useEffect, useLayoutEffect), it's client
-  if (parentHook && CLIENT_ONLY_HOOKS.has(parentHook)) {
+  else if (parentHook && CLIENT_ONLY_HOOKS.has(parentHook)) {
     classification = 'ClientInteractive';
     confidence = 1.0;
     reasons.push(`Inside ${parentHook} callback (client-side effect)`);
@@ -49,9 +59,9 @@ export function classifySegment(input: ClassificationInput): ClassifiedSegment {
     confidence = 0.95;
     reasons.push(`References browser APIs: ${taint.browserGlobals.join(', ')}`);
   }
-  // Rule 3: If pure and inside an extractable hook (useMemo, useCallback), it's server
+  // Rule 3: If pure and inside an extractable hook (useMemo, useCallback), it's pure computation
   else if (purity.pure && parentHook && EXTRACTABLE_HOOKS.has(parentHook)) {
-    classification = 'ServerCompute';
+    classification = 'PureComputation';
     confidence = 0.9;
     reasons.push(`Pure computation inside ${parentHook}`);
     reasons.push(...purity.reasons);
@@ -62,9 +72,9 @@ export function classifySegment(input: ClassificationInput): ClassifiedSegment {
     confidence = 0.0;
     reasons.push('React component (contains JSX) — not extractable');
   }
-  // Rule 4: If pure and a named helper function, it's server
+  // Rule 4: If pure and a named helper function, it's pure computation
   else if (purity.pure && fn.name !== '<anonymous>') {
-    classification = 'ServerCompute';
+    classification = 'PureComputation';
     confidence = 0.85;
     reasons.push('Pure named helper function');
     reasons.push(...purity.reasons);
@@ -109,9 +119,11 @@ export function classifySegment(input: ClassificationInput): ClassifiedSegment {
   };
 }
 
-function generateSegmentId(filePath: string, code: string): string {
+function generateSegmentId(_filePath: string, code: string): string {
+  // Content-addressable: hash only the code, not the file path.
+  // This ensures deterministic IDs across build environments (CI vs local)
+  // and enables deduplication of identical handler bodies across files.
   const hash = createHash('sha256')
-    .update(filePath)
     .update(code)
     .digest('hex')
     .slice(0, 12);

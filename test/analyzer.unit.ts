@@ -106,6 +106,41 @@ describe('parseModule', () => {
     });
   });
 
+  describe('AST metadata (loc)', () => {
+    it('AST nodes have loc with correct line/column positions', () => {
+      const code = 'const x = 1;\nfunction foo() {\n  return x;\n}\n';
+      const result = parseModule(code, 'loc-test.ts');
+
+      // The program node should start at line 1, column 0
+      expect(result.ast.loc).toBeDefined();
+      expect(result.ast.loc!.start.line).toBe(1);
+      expect(result.ast.loc!.start.column).toBe(0);
+
+      // The function declaration 'foo' starts at line 2
+      const fooFn = result.functions.find(f => f.name === 'foo');
+      expect(fooFn).toBeDefined();
+
+      // Find the AST node for foo by span
+      const body = result.ast.body;
+      const funcDecl = body.find(n => n.type === 'FunctionDeclaration');
+      expect(funcDecl).toBeDefined();
+      expect(funcDecl!.loc).toBeDefined();
+      expect(funcDecl!.loc!.start.line).toBe(2);
+      expect(funcDecl!.loc!.start.column).toBe(0);
+    });
+
+    it('loc columns are 0-based', () => {
+      const code = '  const y = 2;\n';
+      const result = parseModule(code, 'col-test.ts');
+
+      // VariableDeclaration starts at column 2 (after two spaces)
+      const varDecl = result.ast.body[0];
+      expect(varDecl.loc).toBeDefined();
+      expect(varDecl.loc!.start.line).toBe(1);
+      expect(varDecl.loc!.start.column).toBe(2);
+    });
+  });
+
   describe('edge cases', () => {
     it('handles empty file', () => {
       const result = parseModule('', 'empty.ts');

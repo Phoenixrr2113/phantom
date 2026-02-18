@@ -8,7 +8,7 @@ describe('phantom smoke test', () => {
     expect(result).toEqual({
       path: 'test.ts',
       segments: [],
-      hasServerExtractions: false,
+      hasExtractions: false,
     });
   });
 

@@ -1,7 +1,7 @@
 {
   "name": "phantom-build",
   "version": "0.0.1",
-  "description": "Automatic React bundle splitting — classifies server-compute vs client-interactive code and splits bundles at handler-level granularity",
+  "description": "Automatic React event handler extraction — classifies and splits event handlers into lazy-loaded chunks at handler-level granularity",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -22,6 +22,9 @@
       "types": "./dist/runtime/index.d.ts",
       "import": "./dist/runtime/index.js"
     }
+  },
+  "bin": {
+    "phantom": "./dist/cli.js"
   },
   "files": [
     "dist"

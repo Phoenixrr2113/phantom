@@ -1,11 +1,11 @@
 /**
  * React hook classification rules.
  *
- * Determines whether a hook's callback is a server-compute candidate
+ * Determines whether a hook's callback is a PureComputation candidate
  * or must stay on the client.
  */
 
-/** Hooks whose callbacks are server-compute candidates if the body is pure */
+/** Hooks whose callbacks are PureComputation candidates if the body is pure */
 export const EXTRACTABLE_HOOKS = new Set([
   'useMemo',
   'useCallback',

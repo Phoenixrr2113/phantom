@@ -2,7 +2,8 @@ import type { Program } from 'estree';
 
 /** Classification of a code segment */
 export type SegmentClassification =
-  | 'ServerCompute'
+  | 'PureComputation'
+  | 'EventHandler'
   | 'ClientInteractive'
   | 'Shared'
   | 'Ambiguous';
@@ -65,30 +66,59 @@ export interface ImportInfo {
   }>;
 }
 
+/** Source map output from esrap's print() */
+export interface SourceMapLike {
+  version: number;
+  sources: string[];
+  sourcesContent: string[];
+  mappings: string;
+  names: string[];
+}
+
 /** Result of full classification + extraction */
 export interface AnalysisResult {
   /** Original file path */
   path: string;
   /** Classified segments */
   segments: ClassifiedSegment[];
-  /** Whether any server extractions were made */
-  hasServerExtractions: boolean;
+  /** Whether any extractions were made */
+  hasExtractions: boolean;
   /** Transformed client code (if extractions were made) */
   clientCode?: string;
-  /** Generated server modules */
-  serverModules?: Array<{ id: string; code: string }>;
+  /** Source map for transformed client code */
+  clientMap?: SourceMapLike;
+  /** Generated lazy-loaded chunk modules */
+  chunkModules?: Array<{ id: string; code: string; map: SourceMapLike }>;
 }
 
 /** Plugin configuration options */
 export interface PhantomPluginOptions {
-  /** Additional modules to treat as server-only */
-  serverModules?: string[];
-  /** Additional modules to treat as client-only */
-  clientModules?: string[];
-  /** Force specific functions to specific sides */
-  overrides?: Record<string, 'server' | 'client'>;
   /** Confidence threshold — below this, leave on client (default: 0.8) */
   confidenceThreshold?: number;
   /** Output path for manifest (default: "phantom.manifest.json") */
   manifestPath?: string;
+  /** Suppress build summary output (default: false) */
+  silent?: boolean;
+}
+
+/** A single entry in the Phantom manifest */
+export interface ManifestEntry {
+  /** Content-hashed segment ID */
+  segmentId: string;
+  /** Original source file */
+  sourceFile: string;
+  /** Virtual module ID for the chunk module */
+  virtualId: string;
+  /** Human-readable segment name */
+  name: string;
+}
+
+/** The full Phantom build manifest */
+export interface PhantomManifest {
+  version: 1;
+  entries: ManifestEntry[];
+  stats: {
+    totalModulesProcessed: number;
+    totalSegmentsExtracted: number;
+  };
 }
