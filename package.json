@@ -36,6 +36,11 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src/",
+    "prerelease": "npm run typecheck && npm test",
+    "release": "./scripts/release.sh",
+    "release:patch": "npm run prerelease && npm version patch && git push && git push --tags && npm publish",
+    "release:minor": "npm run prerelease && npm version minor && git push && git push --tags && npm publish",
+    "release:major": "npm run prerelease && npm version major && git push && git push --tags && npm publish",
     "prepublishOnly": "npm run build"
   },
   "repository": {

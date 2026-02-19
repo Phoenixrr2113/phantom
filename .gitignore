@@ -12,6 +12,9 @@ dist/
 .env.local
 .env.*.local
 
+# npm auth token
+.npmrc
+
 # Phantom build artifacts
 phantom.manifest.json
 *.lazy-cache.json
