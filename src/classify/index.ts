@@ -5,6 +5,14 @@ import { analyzePurity } from './purity.js';
 import { classifySegment } from './boundary.js';
 import { EXTRACTABLE_HOOKS, CLIENT_ONLY_HOOKS, EVENT_HANDLER_PROPS } from './react-patterns.js';
 
+/** Intermediate classification results for downstream consumers (e.g., SSR boundary detection) */
+export interface ClassificationContext {
+  segments: ClassifiedSegment[];
+  taintResults: Map<FunctionDependency, TaintResult>;
+  hookContexts: Map<FunctionDependency, string>;
+  eventHandlerContexts: Map<FunctionDependency, string>;
+}
+
 /**
  * Run the full 3-pass classification on an analyzed module.
  *
@@ -16,8 +24,27 @@ export function classifyModule(
   analyzed: AnalyzedModule,
   sourceCode: string,
 ): ClassifiedSegment[] {
+  return classifyModuleWithContext(analyzed, sourceCode).segments;
+}
+
+/**
+ * Run classification and return intermediate results for SSR analysis.
+ * The SSR boundary detector needs taintResults, hookContexts, and
+ * eventHandlerContexts to avoid redundant AST walks.
+ */
+export function classifyModuleWithContext(
+  analyzed: AnalyzedModule,
+  sourceCode: string,
+): ClassificationContext {
   const { functions } = analyzed;
-  if (functions.length === 0) return [];
+  if (functions.length === 0) {
+    return {
+      segments: [],
+      taintResults: new Map(),
+      hookContexts: new Map(),
+      eventHandlerContexts: new Map(),
+    };
+  }
 
   // Pass 1: Taint analysis
   const taintResults = new Map<FunctionDependency, TaintResult>();
@@ -62,7 +89,7 @@ export function classifyModule(
     segments.push(segment);
   }
 
-  return segments;
+  return { segments, taintResults, hookContexts, eventHandlerContexts };
 }
 
 /**
@@ -328,7 +355,7 @@ function detectEventHandlerContexts(
 /**
  * Simple recursive AST walker.
  */
-function walkNode(node: unknown, callback: (node: Node) => void): void {
+export function walkNode(node: unknown, callback: (node: Node) => void): void {
   if (!node || typeof node !== 'object') return;
 
   if (Array.isArray(node)) {
@@ -353,3 +380,4 @@ export { analyzeTaint, type TaintResult } from './taint.js';
 export { analyzePurity, type PurityResult } from './purity.js';
 export { classifySegment } from './boundary.js';
 export { detectLazyCandidates } from './lazy.js';
+export { classifyModuleSSR } from './ssr-boundary.js';

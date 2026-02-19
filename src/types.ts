@@ -178,6 +178,39 @@ export interface ComponentProfile {
   estimatedSize: number;
 }
 
+// ── SSR Boundary Detection Types ──────────────────────────────────────
+
+/** SSR classification for a React component */
+export type SSRClassification = 'FullyStatic' | 'SSRSafe' | 'ClientOnly';
+
+/** Result of SSR boundary analysis for a single component */
+export interface SSRComponentResult {
+  /** Component function name */
+  name: string;
+  /** SSR classification */
+  classification: SSRClassification;
+  /** Confidence score 0.0–1.0 */
+  confidence: number;
+  /** Human-readable reasons */
+  reasons: string[];
+  /** Browser APIs found in the render path (empty = SSR-safe) */
+  renderPathBrowserAPIs: string[];
+  /** Hooks used by this component */
+  hooks: string[];
+  /** Whether the component has typeof window guards */
+  hasWindowGuards: boolean;
+}
+
+/** Result of SSR boundary analysis for a module */
+export interface SSRModuleResult {
+  /** All components analyzed */
+  components: SSRComponentResult[];
+  /** Whether the module has top-level browser API access */
+  hasTopLevelBrowserAccess: boolean;
+  /** Top-level browser APIs (outside any function) */
+  topLevelBrowserAPIs: string[];
+}
+
 /** Plugin configuration options */
 export interface PhantomPluginOptions {
   /** Confidence threshold — below this, leave on client (default: 0.8) */
@@ -203,6 +236,13 @@ export interface PhantomPluginOptions {
    *   - Server build: phantom({ ssr: true }) (no-op)
    */
   ssr?: boolean;
+  /**
+   * Automatically detect SSR boundaries for components.
+   * - 'auto': Analyze and add to manifest (report-only)
+   * - 'annotate': Prepend "use client" to ClientOnly modules
+   * - false: Disabled (default)
+   */
+  ssrBoundaries?: 'auto' | 'annotate' | false;
 }
 
 /** A single entry in the Phantom manifest */
@@ -227,4 +267,9 @@ export interface PhantomManifest {
     totalModulesProcessed: number;
     totalSegmentsExtracted: number;
   };
+  /** SSR boundary analysis results (when ssrBoundaries option is enabled) */
+  ssrBoundaries?: Array<{
+    sourceFile: string;
+    components: SSRComponentResult[];
+  }>;
 }

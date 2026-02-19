@@ -12,10 +12,17 @@ import type {
   PhantomManifest,
   PhantomPluginOptions,
   PrefetchStrategy,
+  SSRModuleResult,
   SourceMapLike,
 } from './types.js';
 import { parseModule } from './analyzer.js';
-import { classifyModule, detectLazyCandidates } from './classify/index.js';
+import {
+  classifyModule,
+  classifyModuleWithContext,
+  classifyModuleSSR,
+  detectLazyCandidates,
+} from './classify/index.js';
+import type { ClassificationContext } from './classify/index.js';
 import { extractModule } from './extract/index.js';
 import { refineLazyCandidatesBatched } from './classify/llm-client.js';
 
@@ -97,6 +104,8 @@ export const phantom = createUnplugin((options: PhantomPluginOptions = {}) => {
    * Value: map of exported name → { source (relative), importedName }.
    */
   const reExportMap = new Map<string, Map<string, { source: string; importedName: string }>>();
+  /** SSR boundary analysis results (accumulated when ssrBoundaries is enabled) */
+  const ssrBoundaryResults = new Map<string, SSRModuleResult>();
   let moduleCount = 0;
   let modulesWithExtractions = 0;
 
@@ -346,6 +355,7 @@ export const phantom = createUnplugin((options: PhantomPluginOptions = {}) => {
       componentProfiles.clear();
       reExportMap.clear();
       lazyStash.clear();
+      ssrBoundaryResults.clear();
       pendingModules = [];
       if (batchTimer !== null) {
         clearTimeout(batchTimer);
@@ -404,12 +414,27 @@ export const phantom = createUnplugin((options: PhantomPluginOptions = {}) => {
       // ── Phase 1: Parse + classify (always synchronous) ──────────────
       let parsed: AnalyzedModule;
       let segments: ClassifiedSegment[];
+      let classificationContext: ClassificationContext | undefined;
       try {
         parsed = parseModule(code, id);
-        segments = classifyModule(parsed, code);
+        if (options.ssrBoundaries) {
+          // Use the context-returning variant so SSR analysis reuses intermediate results
+          classificationContext = classifyModuleWithContext(parsed, code);
+          segments = classificationContext.segments;
+        } else {
+          segments = classifyModule(parsed, code);
+        }
       } catch (err) {
         console.warn(`[phantom] Skipping ${id}:`, err instanceof Error ? err.message : err);
         return null;
+      }
+
+      // SSR boundary analysis (runs alongside existing classification)
+      if (options.ssrBoundaries && classificationContext) {
+        const ssrResult = classifyModuleSSR(parsed, code, classificationContext);
+        if (ssrResult.components.length > 0) {
+          ssrBoundaryResults.set(id, ssrResult);
+        }
       }
 
       // Build component profile for downstream modules
@@ -460,6 +485,13 @@ export const phantom = createUnplugin((options: PhantomPluginOptions = {}) => {
       );
 
       if (!heuristicExtracted) {
+        // Even without extractions, annotate mode may need to prepend "use client"
+        if (options.ssrBoundaries === 'annotate') {
+          const ssrResult = ssrBoundaryResults.get(id);
+          if (ssrResult && shouldAnnotateClientOnly(ssrResult)) {
+            return { code: `"use client";\n${code}`, map: null };
+          }
+        }
         return null;
       }
 
@@ -531,8 +563,18 @@ export const phantom = createUnplugin((options: PhantomPluginOptions = {}) => {
 
       sourceToChunks.set(id, newVirtualIds);
 
+      let outputCode = finalResult.clientCode!;
+
+      // Annotate mode: prepend "use client" to ClientOnly modules
+      if (options.ssrBoundaries === 'annotate') {
+        const ssrResult = ssrBoundaryResults.get(id);
+        if (ssrResult && shouldAnnotateClientOnly(ssrResult)) {
+          outputCode = `"use client";\n${outputCode}`;
+        }
+      }
+
       return {
-        code: finalResult.clientCode!,
+        code: outputCode,
         map: finalResult.clientMap ?? null,
       };
     },
@@ -592,6 +634,13 @@ export const phantom = createUnplugin((options: PhantomPluginOptions = {}) => {
         },
       };
 
+      // Add SSR boundary data to manifest
+      if (options.ssrBoundaries && ssrBoundaryResults.size > 0) {
+        manifest.ssrBoundaries = [...ssrBoundaryResults.entries()].map(
+          ([file, result]) => ({ sourceFile: file, components: result.components }),
+        );
+      }
+
       const manifestPath = options.manifestPath ?? 'phantom.manifest.json';
       try {
         mkdirSync(dirname(manifestPath), { recursive: true });
@@ -602,6 +651,11 @@ export const phantom = createUnplugin((options: PhantomPluginOptions = {}) => {
 
       if (!options.silent) {
         printBuildSummary(moduleCount, modulesWithExtractions, manifestEntries, manifestPath);
+
+        // Print SSR boundary summary
+        if (options.ssrBoundaries && ssrBoundaryResults.size > 0) {
+          printSSRBoundarySummary(ssrBoundaryResults, options.ssrBoundaries);
+        }
       }
     },
   };
@@ -728,4 +782,45 @@ function buildComponentProfile(segments: ClassifiedSegment[]): ComponentProfile 
     providesContext: false,
     estimatedSize: 0,
   };
+}
+
+// ── SSR Boundary Helpers ──────────────────────────────────────────────
+
+/**
+ * Check if a module should get a "use client" annotation.
+ * True if all components are ClientOnly or the module has top-level browser access.
+ */
+function shouldAnnotateClientOnly(ssrResult: SSRModuleResult): boolean {
+  if (ssrResult.hasTopLevelBrowserAccess) return true;
+  if (ssrResult.components.length === 0) return false;
+  return ssrResult.components.every((c) => c.classification === 'ClientOnly');
+}
+
+function printSSRBoundarySummary(
+  results: Map<string, SSRModuleResult>,
+  mode: 'auto' | 'annotate',
+): void {
+  let fullyStatic = 0;
+  let ssrSafe = 0;
+  let clientOnly = 0;
+
+  for (const [, result] of results) {
+    for (const comp of result.components) {
+      if (comp.classification === 'FullyStatic') fullyStatic++;
+      else if (comp.classification === 'SSRSafe') ssrSafe++;
+      else if (comp.classification === 'ClientOnly') clientOnly++;
+    }
+  }
+
+  const total = fullyStatic + ssrSafe + clientOnly;
+  if (total === 0) return;
+
+  const lines: string[] = [];
+  lines.push(`[phantom] SSR boundary analysis (${mode} mode)`);
+  lines.push(`  Components analyzed: ${total}`);
+  lines.push(`  FullyStatic: ${fullyStatic} (zero client JS needed)`);
+  lines.push(`  SSRSafe: ${ssrSafe} (can SSR, needs hydration)`);
+  lines.push(`  ClientOnly: ${clientOnly} (needs "use client" boundary)`);
+
+  console.log(lines.join('\n'));
 }
