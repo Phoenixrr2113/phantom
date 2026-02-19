@@ -1,0 +1,378 @@
+# Phantom
+
+**Automatic code-splitting for React event handlers and components.**
+
+Phantom is a build plugin that analyzes your React code, extracts event handlers into lazy-loaded chunks, and wraps below-fold components in `React.lazy` + `Suspense` — all automatically, with zero config changes to your components.
+
+```
+npm install phantom-build
+```
+
+## What It Does
+
+Phantom runs at build time (Vite or Webpack) and does two things:
+
+**1. Handler extraction** — Event handlers that touch browser APIs (`window`, `document`, `localStorage`, etc.) are extracted into separate chunks and loaded on-demand when the user first interacts.
+
+**2. Lazy component wrapping** — Child components below the fold in route-level pages are automatically wrapped in `React.lazy()` + `<Suspense>`, so they don't block initial page load.
+
+Your source code stays unchanged. Phantom transforms the output at build time.
+
+## Quick Start
+
+### Vite
+
+```ts
+// vite.config.ts
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+import phantom from 'phantom-build/vite';
+
+export default defineConfig({
+  plugins: [
+    phantom(),
+    react(),
+  ],
+});
+```
+
+### Webpack
+
+```js
+// webpack.config.js
+import phantom from 'phantom-build/webpack';
+
+export default {
+  // ...
+  module: {
+    rules: [
+      {
+        test: /\.tsx?$/,
+        use: {
+          loader: 'ts-loader',
+          options: { transpileOnly: true },
+        },
+        exclude: /node_modules/,
+      },
+    ],
+  },
+  plugins: [
+    phantom(),
+  ],
+};
+```
+
+That's it. Run your build and Phantom handles the rest.
+
+## How It Works
+
+### Handler Extraction
+
+Given this component:
+
+```tsx
+export function InteractiveComponent() {
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const handleClick = (e: React.MouseEvent) => {
+    window.location.href = `/product/${e.target.dataset.id}`;
+  };
+
+  const handleScroll = () => {
+    window.scrollTo(0, 0);
+    localStorage.setItem('scrolled', 'true');
+  };
+
+  return (
+    <div onClick={handleClick}>
+      <button onClick={handleScroll}>Top</button>
+    </div>
+  );
+}
+```
+
+Phantom produces:
+
+- **Client code** — handlers are replaced with lightweight stubs that lazy-load the real logic on first click
+- **Chunk modules** — each handler's logic lives in its own small file, loaded on demand
+
+The stub calls `e.preventDefault()` and `e.stopPropagation()` synchronously (before the import), so critical event behavior is never delayed. The heavy logic (`window.location.href`, `localStorage`, etc.) loads asynchronously.
+
+### Lazy Component Wrapping
+
+Given a route-level page component:
+
+```tsx
+import { CartItems } from './CartItems';
+import { OrderSummary } from './OrderSummary';
+import { PaymentForm } from './PaymentForm';
+import { AddressForm } from './AddressForm';
+import { PromoCode } from './PromoCode';
+
+export default function CheckoutPage({ order, user }) {
+  const [showPromo, setShowPromo] = useState(false);
+
+  return (
+    <CartProvider cartId={order.cartId}>
+      <CartItems items={order.items} />
+      <OrderSummary totals={order.totals} />
+      <PaymentForm userId={user.id} />
+      <AddressForm userId={user.id} />
+      {showPromo && <PromoCode cartId={order.cartId} />}
+    </CartProvider>
+  );
+}
+```
+
+Phantom transforms this to:
+
+```tsx
+import { CartItems } from './CartItems';
+import { OrderSummary } from './OrderSummary';
+
+const PaymentForm = lazy(() =>
+  import('./PaymentForm').then(m => ({ default: m.PaymentForm }))
+);
+const AddressForm = lazy(() =>
+  import('./AddressForm').then(m => ({ default: m.AddressForm }))
+);
+const PromoCode = lazy(() =>
+  import('./PromoCode').then(m => ({ default: m.PromoCode }))
+);
+
+export default function CheckoutPage({ order, user }) {
+  const [showPromo, setShowPromo] = useState(false);
+
+  return (
+    <CartProvider cartId={order.cartId}>
+      {/* Kept static: above fold */}
+      <CartItems items={order.items} />
+      <OrderSummary totals={order.totals} />
+
+      {/* Lazy: adjacent siblings share one Suspense boundary */}
+      <Suspense fallback={null}>
+        <PaymentForm userId={user.id} />
+        <AddressForm userId={user.id} />
+      </Suspense>
+
+      {/* Lazy: conditionally rendered, own boundary */}
+      {showPromo && (
+        <Suspense fallback={null}>
+          <PromoCode cartId={order.cartId} />
+        </Suspense>
+      )}
+    </CartProvider>
+  );
+}
+```
+
+**What stays static (not lazified):**
+- Components above the fold (positions 0-1 in the JSX tree)
+- Context providers (must hydrate before consumers)
+- Components with no meaningful JS cost (pure display, no handlers/effects/state)
+
+**What gets lazified:**
+- Components below the fold (position 2+)
+- Conditionally rendered components (`{flag && <Component />}`)
+- Components with handlers, effects, or state (worth deferring)
+
+## Configuration
+
+```ts
+phantom({
+  // Confidence threshold for handler extraction (0.0 - 1.0)
+  // Lower = more aggressive extraction. Default: 0.8
+  confidenceThreshold: 0.8,
+
+  // Enable/disable lazy component wrapping. Default: true
+  enableLazy: true,
+
+  // Output path for the build manifest. Default: "phantom.manifest.json"
+  manifestPath: 'phantom.manifest.json',
+
+  // Suppress console output during build. Default: false
+  silent: false,
+
+  // Cerebras API key for LLM-assisted optimization (optional)
+  cerebrasApiKey: process.env.CEREBRAS_API_KEY,
+
+  // Cerebras model ID. Default: "qwen-3-32b"
+  cerebrasModel: 'qwen-3-32b',
+})
+```
+
+### LLM-Assisted Optimization
+
+Phantom's heuristics handle ~80% of cases correctly. For the remaining 20% that require judgment (grouping related components, choosing prefetch strategies for ambiguous cases), you can enable LLM refinement:
+
+```bash
+# .env
+CEREBRAS_API_KEY=your_key_here
+```
+
+```ts
+phantom({
+  cerebrasApiKey: process.env.CEREBRAS_API_KEY,
+})
+```
+
+The LLM call is batched across modules (one API call per build), results are cached to disk (`*.lazy-cache.json`), and failures fall back to heuristics silently. The LLM never blocks your build.
+
+## CLI
+
+Phantom includes a CLI for analyzing individual files:
+
+```bash
+npx phantom analyze src/components/CheckoutPage.tsx
+```
+
+Output:
+
+```
+Phantom Analysis: src/components/CheckoutPage.tsx
+════════════════════════════════════════════════════════════
+
+  Name                           Class                Conf  Extracted?
+  ────────────────────────────── ──────────────────── ────── ──────────
+  handleTogglePromo              EventHandler         0.95  ✓ yes
+    → JSX event handler prop: onClick
+    → Browser API: window referenced
+
+  Segments: 5
+  Threshold: 0.8
+  Chunks extracted: 1
+    seg_abc123 (0.1 KB)
+
+  Lazy Components:
+  Name                      Strategy     Group
+  ───────────────────────── ──────────── ───────────────
+  PaymentForm               viewport     group_0
+  AddressForm               viewport     group_0
+  PromoCode                 interaction  (solo)
+
+  Kept Static:
+    CartItems                 → Position 0 in route component — above fold
+    OrderSummary              → Position 1 in route component — above fold
+    CartProvider              → Context provider — must hydrate before consumers
+```
+
+### CLI Options
+
+```
+phantom analyze <file> [options]
+
+Options:
+  --threshold <number>   Confidence threshold for extraction (default: 0.8)
+  --help, -h             Show this help message
+```
+
+## Build Manifest
+
+Each build produces a `phantom.manifest.json` describing all extractions:
+
+```json
+{
+  "version": 1,
+  "entries": [
+    {
+      "segmentId": "seg_01b6063a6ad3",
+      "sourceFile": "/src/InteractiveComponent.tsx",
+      "virtualId": "phantom:seg_01b6063a6ad3.chunk.js",
+      "name": "handleClick",
+      "kind": "handler"
+    },
+    {
+      "segmentId": "lazy_PaymentForm",
+      "sourceFile": "/src/CheckoutPage.tsx",
+      "virtualId": "./PaymentForm",
+      "name": "lazy(PaymentForm)",
+      "kind": "lazy"
+    }
+  ],
+  "stats": {
+    "totalModulesProcessed": 42,
+    "totalSegmentsExtracted": 12
+  }
+}
+```
+
+## Architecture Overview
+
+Phantom processes each module through a 5-phase pipeline:
+
+1. **Parse** — OXC parser produces an ESTree AST; eslint-scope resolves variable bindings
+2. **Classify** — Three-pass analysis (taint, purity, boundary detection) classifies each function as `EventHandler`, `PureComputation`, `ClientInteractive`, `Shared`, or `Ambiguous`
+3. **Lazy Detection** — Identifies child component imports that should be `React.lazy` wrapped, using JSX position, conditionality, and cross-module component profiles
+4. **Extract** — Rewrites the AST: handler bodies move to virtual chunk modules, component imports become `lazy()` declarations, JSX gets `<Suspense>` wrappers
+5. **LLM Refinement** (optional) — Batched API call refines prefetch strategies and Suspense grouping for edge cases
+
+### Classification Rules
+
+| Classification | Criteria | Action |
+|---|---|---|
+| `EventHandler` | Used exclusively as JSX event prop (`onClick`, `onSubmit`, etc.), references browser APIs | Extracted to lazy chunk |
+| `PureComputation` | No browser globals, no side effects, deterministic | Kept inline |
+| `ClientInteractive` | Browser APIs but not an event handler (effects, observers) | Kept inline |
+| `Shared` | Mix of pure and impure, or component render function | Kept inline |
+| `Ambiguous` | Below confidence threshold | Kept inline (conservative) |
+
+### Prefetch Strategies
+
+| Strategy | When Used | Behavior |
+|---|---|---|
+| `viewport` | Below-fold components | Load when element enters viewport (IntersectionObserver) |
+| `interaction` | Conditionally rendered components | Load on user interaction that triggers render |
+| `idle` | Components with effects | Load during `requestIdleCallback` |
+| `immediate` | LLM-determined critical paths | Load immediately after initial render |
+
+## How the Runtime Works
+
+The `phantom-build/runtime` module provides `__phantom_lazy`, which:
+
+1. On first invocation, dynamically imports the handler chunk
+2. Caches the loaded function for instant subsequent calls
+3. Deduplicates concurrent imports (rapid clicks don't trigger multiple fetches)
+4. Cleans up on failure so retries work
+
+```ts
+import { __phantom_lazy } from 'phantom-build/runtime';
+
+// Generated stub (you never write this — Phantom does):
+const handleClick = (e) => {
+  e.preventDefault();        // synchronous — runs immediately
+  e.persist?.();             // React <17 compat
+  __phantom_lazy(
+    () => import('phantom:seg_abc123.chunk.js'),
+    'seg_abc123',
+    e,                       // forwarded args
+    inputRef,                // captured variables
+  );
+};
+```
+
+## Barrel File Support
+
+Phantom resolves through barrel files automatically. If your components use index re-exports:
+
+```ts
+// components/index.ts
+export { PaymentForm } from './PaymentForm';
+export { AddressForm } from './AddressForm';
+```
+
+```tsx
+// CheckoutPage.tsx
+import { PaymentForm, AddressForm } from './components';
+```
+
+The generated `lazy()` calls will target the actual component modules (`./components/PaymentForm`), not the barrel file — producing optimal chunk splitting.
+
+## Requirements
+
+- Node.js >= 18
+- React 16.6+ (for `React.lazy` and `Suspense`)
+- Vite or Webpack
+
+## License
+
+MIT

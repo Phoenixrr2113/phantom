@@ -1,7 +1,45 @@
+# Dependencies
 node_modules/
+
+# Build output
 dist/
+
+# TypeScript incremental compilation
 *.tsbuildinfo
+
+# Environment variables (API keys, etc.)
 .env
+.env.local
+.env.*.local
+
+# Phantom build artifacts
+phantom.manifest.json
+*.lazy-cache.json
+
+# Integration test artifacts
+integration-test/dist/
+integration-test/node_modules/
+integration-test/phantom.manifest.json
+integration-test/*.lazy-cache.json
+integration-test-webpack/dist/
+integration-test-webpack/node_modules/
+integration-test-webpack/phantom.manifest.json
+integration-test-webpack/*.lazy-cache.json
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Claude Code
+.claude/
+
+# Internal planning docs
 PLAN.md
-integration-test/phantom.manifest.json
-integration-test/phantom.manifest.json
+ARCHITECTURE.md
