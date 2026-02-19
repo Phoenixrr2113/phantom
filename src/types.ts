@@ -194,6 +194,15 @@ export interface PhantomPluginOptions {
   cerebrasApiKey?: string;
   /** Cerebras model ID (default: "qwen-3-32b") */
   cerebrasModel?: string;
+  /**
+   * SSR mode — skip all transforms so the server bundle gets original code
+   * untouched for synchronous renderToString(). Default: false.
+   *
+   * In custom SSR setups, run two bundler instances:
+   *   - Client build: phantom() (full transforms)
+   *   - Server build: phantom({ ssr: true }) (no-op)
+   */
+  ssr?: boolean;
 }
 
 /** A single entry in the Phantom manifest */

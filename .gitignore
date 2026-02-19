@@ -43,3 +43,5 @@ Thumbs.db
 # Internal planning docs
 PLAN.md
 ARCHITECTURE.md
+docs/future/enterprise-ssr-case-study.md
+docs/future/auto-ssr-boundaries.md

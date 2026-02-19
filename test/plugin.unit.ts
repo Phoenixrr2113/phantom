@@ -448,6 +448,92 @@ function App() {
     });
   });
 
+  describe('SSR mode', () => {
+    it('transform returns null for all modules (no-op)', async () => {
+      const plugin = createPlugin({ ssr: true });
+      const code = fixture('event-handler.tsx');
+      const result = await (plugin.transform as Function).call(
+        mockContext, code, 'event-handler.tsx',
+      );
+      // SSR mode: original code passes through untouched
+      expect(result).toBeNull();
+    });
+
+    it('transform returns null even for modules with lazy candidates', async () => {
+      const plugin = createPlugin({ ssr: true });
+      const code = `
+import React from 'react';
+import { PaymentForm } from './PaymentForm';
+
+export default function CheckoutPage() {
+  return (
+    <div>
+      <header>Header</header>
+      <nav>Nav</nav>
+      <PaymentForm />
+    </div>
+  );
+}
+      `;
+      const result = await (plugin.transform as Function).call(
+        mockContext, code, '/src/CheckoutPage.tsx',
+      );
+      expect(result).toBeNull();
+    });
+
+    it('buildEnd prints SSR notice and does not write manifest', () => {
+      const plugin = createPlugin({ ssr: true });
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+      (plugin.buildEnd as Function).call(mockContext);
+
+      const output = logSpy.mock.calls.map((c) => c[0]).join('\n');
+      expect(output).toContain('SSR mode');
+      expect(output).not.toContain('Manifest:');
+
+      logSpy.mockRestore();
+    });
+
+    it('buildEnd respects silent option in SSR mode', () => {
+      const plugin = createPlugin({ ssr: true, silent: true });
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+      (plugin.buildEnd as Function).call(mockContext);
+
+      const phantomCalls = logSpy.mock.calls.filter(
+        (c) => typeof c[0] === 'string' && c[0].includes('[phantom]'),
+      );
+      expect(phantomCalls.length).toBe(0);
+
+      logSpy.mockRestore();
+    });
+
+    it('resolveId and load still work in SSR mode (no crash)', () => {
+      const plugin = createPlugin({ ssr: true });
+
+      // resolveId should still resolve phantom: prefixed IDs
+      const resolved = (plugin.resolveId as Function).call(
+        mockContext, 'phantom:seg_abc.chunk.js', undefined, { isEntry: false },
+      );
+      expect(resolved).toBe('\0phantom:seg_abc.chunk.js');
+
+      // load returns undefined since no chunks were registered
+      const loaded = (plugin.load as Function).call(
+        mockContext, '\0phantom:seg_abc.chunk.js',
+      );
+      expect(loaded).toBeUndefined();
+    });
+
+    it('works alongside enableLazy: false without conflict', async () => {
+      const plugin = createPlugin({ ssr: true, enableLazy: false });
+      const code = fixture('event-handler.tsx');
+      const result = await (plugin.transform as Function).call(
+        mockContext, code, 'event-handler.tsx',
+      );
+      expect(result).toBeNull();
+    });
+  });
+
   describe('barrel file resolution', () => {
     it('resolves lazy candidates through barrel file re-exports', async () => {
       const plugin = createPlugin({ silent: true });

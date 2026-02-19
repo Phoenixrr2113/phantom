@@ -337,6 +337,9 @@ export const phantom = createUnplugin((options: PhantomPluginOptions = {}) => {
 
     // Reset state on each build cycle (critical for watch/HMR mode)
     buildStart() {
+      // SSR mode: no state needed — transforms are skipped
+      if (options.ssr) return;
+
       chunkModuleMap.clear();
       manifestEntries.length = 0;
       sourceToChunks.clear();
@@ -376,6 +379,10 @@ export const phantom = createUnplugin((options: PhantomPluginOptions = {}) => {
     },
 
     async transform(code: string, id: string) {
+      // SSR mode: skip all transforms — server bundle needs original code
+      // for synchronous renderToString()
+      if (options.ssr) return null;
+
       moduleCount++;
 
       // HMR cleanup: remove stale chunks from a previous transform of this file
@@ -567,6 +574,14 @@ export const phantom = createUnplugin((options: PhantomPluginOptions = {}) => {
     },
 
     buildEnd() {
+      // SSR mode: skip manifest writing and print a brief notice
+      if (options.ssr) {
+        if (!options.silent) {
+          console.log('[phantom] SSR mode \u2014 all transforms skipped');
+        }
+        return;
+      }
+
       // Write manifest
       const manifest: PhantomManifest = {
         version: 1,

@@ -198,8 +198,58 @@ phantom({
 
   // Cerebras model ID. Default: "qwen-3-32b"
   cerebrasModel: 'qwen-3-32b',
+
+  // SSR mode: skip all transforms for server builds. Default: false
+  ssr: false,
 })
 ```
+
+### SSR (Server-Side Rendering)
+
+Phantom supports custom SSR setups where you run separate client and server builds. `React.lazy()` throws when used with `renderToString()`, so the server bundle needs original code with synchronous imports.
+
+**The solution:** run Phantom with `ssr: true` for your server build. This makes the plugin a complete no-op — your server bundle gets untouched source code.
+
+#### Vite
+
+```ts
+// vite.config.server.ts
+import phantom from 'phantom-build/vite';
+
+export default defineConfig({
+  plugins: [
+    phantom({ ssr: true }),
+    react(),
+  ],
+});
+```
+
+#### Webpack
+
+```js
+// webpack.config.server.js
+import phantom from 'phantom-build/webpack';
+
+export default {
+  target: 'node',
+  plugins: [
+    phantom({ ssr: true }),
+  ],
+};
+```
+
+#### Typical Setup
+
+Most custom SSR setups (e.g., .NET + React, Express + React) use two bundler configs:
+
+```
+webpack.config.client.js  →  phantom()               // full transforms
+webpack.config.server.js  →  phantom({ ssr: true })   // no-op
+```
+
+The client build produces lazy-loaded handler chunks and `React.lazy` wrappers. The server build produces a synchronous bundle for `renderToString()` with all components inline.
+
+**Why not strip just `React.lazy`?** Selectively removing lazy transforms while keeping handler extraction would still inject `__phantom_lazy` runtime imports and dynamic `import()` calls into the server bundle. A clean no-op is simpler, produces the smallest server bundle, and avoids any SSR-incompatible code paths.
 
 ### LLM-Assisted Optimization
 
@@ -372,6 +422,7 @@ The generated `lazy()` calls will target the actual component modules (`./compon
 - Node.js >= 18
 - React 16.6+ (for `React.lazy` and `Suspense`)
 - Vite or Webpack
+- For SSR: any custom server setup (Express, .NET, etc.) — not framework-specific
 
 ## License
 
