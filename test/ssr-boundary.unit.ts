@@ -266,6 +266,108 @@ describe('SSR boundary detection', () => {
       const comp = compByName(result, 'ShortCircuit');
       expect(comp!.hasWindowGuards).toBe(true);
     });
+
+    it('detects typeof document guard', () => {
+      const result = analyzeSSR(`
+        export function DocGuard() {
+          if (typeof document !== 'undefined') {
+            document.title = 'Hello';
+          }
+          return <div>Content</div>;
+        }
+      `);
+      const comp = compByName(result, 'DocGuard');
+      expect(comp).toBeDefined();
+      expect(comp!.hasWindowGuards).toBe(true);
+      expect(comp!.classification).toBe('SSRSafe');
+    });
+
+    it('detects typeof navigator guard', () => {
+      const result = analyzeSSR(`
+        export function NavGuard() {
+          let ua = 'unknown';
+          if (typeof navigator !== 'undefined') {
+            ua = navigator.userAgent;
+          }
+          return <pre>{ua}</pre>;
+        }
+      `);
+      const comp = compByName(result, 'NavGuard');
+      expect(comp).toBeDefined();
+      expect(comp!.hasWindowGuards).toBe(true);
+      expect(comp!.classification).toBe('SSRSafe');
+    });
+  });
+
+  describe('module-level typeof safety', () => {
+    it('does not flag typeof window at module scope as top-level browser access', () => {
+      const result = analyzeSSR(`
+        const isClient = typeof window !== 'undefined';
+        export function Display() {
+          return <div>{isClient ? 'Client' : 'Server'}</div>;
+        }
+      `);
+      expect(result.hasTopLevelBrowserAccess).toBe(false);
+      const comp = compByName(result, 'Display');
+      expect(comp).toBeDefined();
+      // Should not be ClientOnly just because of typeof window at module scope
+      expect(comp!.classification).not.toBe('ClientOnly');
+    });
+
+    it('does flag actual window access at module scope', () => {
+      const result = analyzeSSR(`
+        const width = window.innerWidth;
+        export function Display() {
+          return <div>Width: {width}</div>;
+        }
+      `);
+      expect(result.hasTopLevelBrowserAccess).toBe(true);
+    });
+
+    it('does not flag typeof document at module scope as top-level browser access', () => {
+      const result = analyzeSSR(`
+        const hasDOM = typeof document !== 'undefined';
+        export function App() {
+          return <div>{hasDOM ? 'DOM' : 'No DOM'}</div>;
+        }
+      `);
+      expect(result.hasTopLevelBrowserAccess).toBe(false);
+    });
+  });
+
+  describe('collectDirectHookCalls depth', () => {
+    it('does not attribute hooks inside useEffect callbacks to component', () => {
+      // useCustomHook inside a useEffect should not be attributed to the component
+      const result = analyzeSSR(`
+        import { useEffect } from 'react';
+        function useDocTitle(t: string) { document.title = t; }
+        export function Comp() {
+          useEffect(() => { useDocTitle('hello'); }, []);
+          return <div>Hello</div>;
+        }
+      `);
+      const comp = compByName(result, 'Comp');
+      expect(comp).toBeDefined();
+      // The component's direct hooks should include useEffect but NOT useDocTitle
+      // (useDocTitle is called inside the useEffect callback)
+      expect(comp!.hooks).toContain('useEffect');
+      expect(comp!.hooks).not.toContain('useDocTitle');
+    });
+
+    it('attributes direct hook calls in component body correctly', () => {
+      const result = analyzeSSR(`
+        import { useState, useMemo } from 'react';
+        export function Counter() {
+          const [count, setCount] = useState(0);
+          const doubled = useMemo(() => count * 2, [count]);
+          return <div>{doubled}</div>;
+        }
+      `);
+      const comp = compByName(result, 'Counter');
+      expect(comp).toBeDefined();
+      expect(comp!.hooks).toContain('useState');
+      expect(comp!.hooks).toContain('useMemo');
+    });
   });
 
   describe('early return guard detection (mini-CFG)', () => {

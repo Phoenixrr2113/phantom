@@ -5,25 +5,29 @@
       "segmentId": "seg_d74d178b87e2",
       "sourceFile": "/Users/randywilson/Desktop/phantom/integration-test/src/App.tsx",
       "virtualId": "\u0000phantom:seg_d74d178b87e2.chunk.js",
-      "name": "_Users_randywilson_Desktop_phantom_integration_test_src_App_handleClick"
+      "name": "_Users_randywilson_Desktop_phantom_integration_test_src_App_handleClick",
+      "kind": "handler"
     },
     {
       "segmentId": "seg_22657f682ba2",
       "sourceFile": "/Users/randywilson/Desktop/phantom/integration-test/src/App.tsx",
       "virtualId": "\u0000phantom:seg_22657f682ba2.chunk.js",
-      "name": "_Users_randywilson_Desktop_phantom_integration_test_src_App_anon_3"
+      "name": "_Users_randywilson_Desktop_phantom_integration_test_src_App_anon_3",
+      "kind": "handler"
     },
     {
       "segmentId": "seg_481130e0af36",
       "sourceFile": "/Users/randywilson/Desktop/phantom/integration-test/src/App.tsx",
       "virtualId": "\u0000phantom:seg_481130e0af36.chunk.js",
-      "name": "_Users_randywilson_Desktop_phantom_integration_test_src_App_handleScroll"
+      "name": "_Users_randywilson_Desktop_phantom_integration_test_src_App_handleScroll",
+      "kind": "handler"
     },
     {
       "segmentId": "seg_247815d03c4f",
       "sourceFile": "/Users/randywilson/Desktop/phantom/integration-test/src/App.tsx",
       "virtualId": "\u0000phantom:seg_247815d03c4f.chunk.js",
-      "name": "_Users_randywilson_Desktop_phantom_integration_test_src_App_handleFormat"
+      "name": "_Users_randywilson_Desktop_phantom_integration_test_src_App_handleFormat",
+      "kind": "handler"
     }
   ],
   "stats": {

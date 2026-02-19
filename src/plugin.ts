@@ -410,6 +410,7 @@ export const phantom = createUnplugin((options: PhantomPluginOptions = {}) => {
         sourceToChunks.delete(id);
       }
       lazyStash.delete(id);
+      ssrBoundaryResults.delete(id);
 
       // ── Phase 1: Parse + classify (always synchronous) ──────────────
       let parsed: AnalyzedModule;
@@ -431,9 +432,18 @@ export const phantom = createUnplugin((options: PhantomPluginOptions = {}) => {
 
       // SSR boundary analysis (runs alongside existing classification)
       if (options.ssrBoundaries && classificationContext) {
-        const ssrResult = classifyModuleSSR(parsed, code, classificationContext);
-        if (ssrResult.components.length > 0) {
-          ssrBoundaryResults.set(id, ssrResult);
+        try {
+          const ssrResult = classifyModuleSSR(parsed, code, classificationContext);
+          if (ssrResult.components.length > 0 || ssrResult.hasTopLevelBrowserAccess) {
+            ssrBoundaryResults.set(id, ssrResult);
+          }
+        } catch (ssrErr) {
+          if (!options.silent) {
+            console.warn(
+              `[phantom] SSR boundary analysis failed for ${id}:`,
+              ssrErr instanceof Error ? ssrErr.message : ssrErr,
+            );
+          }
         }
       }
 
@@ -488,7 +498,7 @@ export const phantom = createUnplugin((options: PhantomPluginOptions = {}) => {
         // Even without extractions, annotate mode may need to prepend "use client"
         if (options.ssrBoundaries === 'annotate') {
           const ssrResult = ssrBoundaryResults.get(id);
-          if (ssrResult && shouldAnnotateClientOnly(ssrResult)) {
+          if (ssrResult && shouldAnnotateClientOnly(ssrResult) && !hasUseClientDirective(code)) {
             return { code: `"use client";\n${code}`, map: null };
           }
         }
@@ -568,7 +578,7 @@ export const phantom = createUnplugin((options: PhantomPluginOptions = {}) => {
       // Annotate mode: prepend "use client" to ClientOnly modules
       if (options.ssrBoundaries === 'annotate') {
         const ssrResult = ssrBoundaryResults.get(id);
-        if (ssrResult && shouldAnnotateClientOnly(ssrResult)) {
+        if (ssrResult && shouldAnnotateClientOnly(ssrResult) && !hasUseClientDirective(outputCode)) {
           outputCode = `"use client";\n${outputCode}`;
         }
       }
@@ -794,6 +804,14 @@ function shouldAnnotateClientOnly(ssrResult: SSRModuleResult): boolean {
   if (ssrResult.hasTopLevelBrowserAccess) return true;
   if (ssrResult.components.length === 0) return false;
   return ssrResult.components.every((c) => c.classification === 'ClientOnly');
+}
+
+/**
+ * Check if code already has a "use client" directive at the top.
+ */
+function hasUseClientDirective(code: string): boolean {
+  // Match "use client" or 'use client' at the start of the file (after optional whitespace)
+  return /^\s*["']use client["'];?/m.test(code);
 }
 
 function printSSRBoundarySummary(

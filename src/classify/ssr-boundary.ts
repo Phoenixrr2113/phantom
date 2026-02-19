@@ -244,16 +244,20 @@ function analyzeRenderPath(
     }
   }
 
-  // Step C2: Handle `typeof window` — the `window` in `typeof window !== 'undefined'`
+  // Step C2: Handle `typeof <global>` — the identifier in `typeof window !== 'undefined'`
   // is safe (typeof never throws) and should not count as browser API usage.
-  // If `window` is only referenced via typeof checks and inside guards, remove it.
-  if (componentNode && renderPathGlobals.has('window')) {
-    const allWindowUsages = countGlobalUsages(componentNode, 'window');
-    const typeofWindowUsages = countTypeofUsages(componentNode, 'window');
-    if (allWindowUsages > 0 && allWindowUsages === typeofWindowUsages) {
-      // All window references are typeof checks — safe to remove
-      renderPathGlobals.delete('window');
-      hasWindowGuards = true;
+  // If a global is only referenced via typeof checks and inside guards, remove it.
+  if (componentNode) {
+    for (const guardGlobal of TYPEOF_GUARD_GLOBALS) {
+      if (renderPathGlobals.has(guardGlobal)) {
+        const allUsages = countGlobalUsages(componentNode, guardGlobal);
+        const typeofUsages = countTypeofUsages(componentNode, guardGlobal);
+        if (allUsages > 0 && allUsages === typeofUsages) {
+          // All references are typeof checks — safe to remove
+          renderPathGlobals.delete(guardGlobal);
+          hasWindowGuards = true;
+        }
+      }
     }
   }
 
@@ -282,13 +286,13 @@ function analyzeRenderPath(
 /**
  * Detect `typeof window` guard patterns in the AST.
  *
- * Supported patterns:
+ * Supported patterns (for window, document, navigator, self):
  * - `if (typeof window !== 'undefined') { ... }`
- * - `if (typeof window === 'undefined') { ... } else { ... }`
- * - `typeof window !== 'undefined' && expr` (short-circuit)
+ * - `if (typeof document === 'undefined') { ... } else { ... }`
+ * - `typeof navigator !== 'undefined' && expr` (short-circuit)
  * - `const isClient = typeof window !== 'undefined'`
  * - Early return: `if (typeof window === 'undefined') return ...` (code after is browser-only)
- * - Early return: `if (typeof window !== 'undefined') return ...` (code after is SSR-safe)
+ * - Early return: `if (typeof document !== 'undefined') return ...` (code after is SSR-safe)
  *
  * Returns a Set of span keys ("start:end") for AST nodes that are
  * inside a browser-only guard (the consequent of the check).
@@ -477,16 +481,22 @@ function isTypeofWindowCheck(node: Node, operator: '!==' | '==='): boolean {
   const right = binary.right;
 
   return (
-    (isTypeofWindow(left) && isUndefinedLiteral(right)) ||
-    (isUndefinedLiteral(left) && isTypeofWindow(right))
+    (isTypeofBrowserGlobal(left) && isUndefinedLiteral(right)) ||
+    (isUndefinedLiteral(left) && isTypeofBrowserGlobal(right))
   );
 }
 
-function isTypeofWindow(node: Node): boolean {
+/** Browser globals commonly used in typeof SSR guards */
+const TYPEOF_GUARD_GLOBALS = new Set(['window', 'document', 'navigator', 'self']);
+
+function isTypeofBrowserGlobal(node: Node): boolean {
   if (node.type !== 'UnaryExpression') return false;
   const unary = node as Node & { operator: string; argument: Node };
   if (unary.operator !== 'typeof') return false;
-  return unary.argument.type === 'Identifier' && (unary.argument as Identifier).name === 'window';
+  return (
+    unary.argument.type === 'Identifier' &&
+    TYPEOF_GUARD_GLOBALS.has((unary.argument as Identifier).name)
+  );
 }
 
 function isUndefinedLiteral(node: Node): boolean {
@@ -547,16 +557,28 @@ function detectTopLevelBrowserAccess(analyzed: AnalyzedModule): {
     functionSpans.add(`${fn.span.start}:${fn.span.end}`);
   }
 
-  // Collect identifiers at module scope (not inside any function)
+  // Collect identifiers at module scope (not inside any function).
+  // Skip identifiers that are the argument of a `typeof` expression,
+  // since `typeof window` is safe and doesn't actually access window.
+  const typeofArgPositions = new Set<number>();
+  walkNode(body, (node) => {
+    if (node.type === 'UnaryExpression') {
+      const unary = node as Node & { operator: string; argument: Node };
+      if (unary.operator === 'typeof' && unary.argument.type === 'Identifier') {
+        const argPos = (unary.argument as Node & { start?: number }).start;
+        if (argPos != null) typeofArgPositions.add(argPos);
+      }
+    }
+  });
+
   walkNode(body, (node) => {
     if (node.type === 'Identifier') {
       const name = (node as Identifier).name;
       if (isBrowserGlobal(name)) {
-        // Check this identifier is not inside a function body
-        // We approximate: if the identifier is at module scope
-        // (its position isn't within any function span)
         const pos = (node as Node & { start?: number }).start;
         if (pos != null && !isInsideAnyFunction(pos, analyzed.functions)) {
+          // Skip identifiers inside typeof expressions (typeof window is safe)
+          if (typeofArgPositions.has(pos)) return;
           if (!topLevelBrowserAPIs.includes(name)) {
             topLevelBrowserAPIs.push(name);
           }
@@ -779,9 +801,13 @@ function findFunctionNode(ast: Node, span: { start: number; end: number }): Node
 /**
  * Collect hook calls made directly in a component body (not inside nested functions).
  * Detects patterns like: useState(), useRef(), useContext(), etc.
+ *
+ * Uses a shallow walk that stops at nested function boundaries to avoid
+ * attributing hooks from useEffect callbacks or helper functions to the
+ * component's direct hooks list.
  */
 function collectDirectHookCalls(componentNode: Node, hooks: string[]): void {
-  walkNode(componentNode, (node) => {
+  walkNodeShallow(componentNode, (node) => {
     if (node.type !== 'CallExpression') return;
 
     const call = node as Node & { callee: Node };
@@ -802,6 +828,47 @@ function collectDirectHookCalls(componentNode: Node, hooks: string[]): void {
       hooks.push(hookName);
     }
   });
+}
+
+/**
+ * Walk an AST node recursively but stop at nested function boundaries.
+ * Does not recurse into FunctionDeclaration, FunctionExpression, or
+ * ArrowFunctionExpression children (other than the root node itself).
+ */
+function walkNodeShallow(
+  node: unknown,
+  callback: (node: Node) => void,
+  isRoot = true,
+): void {
+  if (!node || typeof node !== 'object') return;
+
+  if (Array.isArray(node)) {
+    for (const child of node) {
+      walkNodeShallow(child, callback, false);
+    }
+    return;
+  }
+
+  const obj = node as Record<string, unknown>;
+  if (typeof obj.type !== 'string') return;
+
+  // Stop at nested function boundaries (but visit the root node itself)
+  if (!isRoot) {
+    if (
+      obj.type === 'FunctionDeclaration' ||
+      obj.type === 'FunctionExpression' ||
+      obj.type === 'ArrowFunctionExpression'
+    ) {
+      return;
+    }
+  }
+
+  callback(obj as unknown as Node);
+
+  for (const key of Object.keys(obj)) {
+    if (key === 'type') continue;
+    walkNodeShallow(obj[key], callback, false);
+  }
 }
 
 /**

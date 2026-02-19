@@ -15,4 +15,7 @@ export type {
   PrefetchStrategy,
   ReExportMapping,
   SegmentClassification,
+  SSRClassification,
+  SSRComponentResult,
+  SSRModuleResult,
 } from './types.js';
