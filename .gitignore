@@ -1,3 +1,7 @@
 node_modules/
 dist/
 *.tsbuildinfo
+.env
+PLAN.md
+integration-test/phantom.manifest.json
+integration-test/phantom.manifest.json

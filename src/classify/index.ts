@@ -352,3 +352,4 @@ function walkNode(node: unknown, callback: (node: Node) => void): void {
 export { analyzeTaint, type TaintResult } from './taint.js';
 export { analyzePurity, type PurityResult } from './purity.js';
 export { classifySegment } from './boundary.js';
+export { detectLazyCandidates } from './lazy.js';

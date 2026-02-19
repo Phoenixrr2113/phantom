@@ -105,6 +105,26 @@ function main(): void {
     console.log('  Chunks extracted: 0');
   }
 
+  // Lazy component candidates
+  if (result.lazyCandidates && result.lazyCandidates.length > 0) {
+    console.log(`\n  Lazy Components:`);
+    console.log(`  ${'Name'.padEnd(25)} ${'Strategy'.padEnd(12)} Group`);
+    console.log(`  ${'─'.repeat(25)} ${'─'.repeat(12)} ${'─'.repeat(15)}`);
+    for (const lc of result.lazyCandidates) {
+      console.log(
+        `  ${lc.localName.padEnd(25)} ${lc.prefetch.padEnd(12)} ${lc.suspenseGroup ?? '(solo)'}`,
+      );
+      console.log(`    → ${lc.reason}`);
+    }
+  }
+
+  if (result.lazyKeptStatic && result.lazyKeptStatic.length > 0) {
+    console.log(`\n  Kept Static:`);
+    for (const ks of result.lazyKeptStatic) {
+      console.log(`    ${ks.localName.padEnd(25)} → ${ks.reason}`);
+    }
+  }
+
   console.log('');
 }
 

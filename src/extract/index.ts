@@ -1,10 +1,11 @@
 import type { Node, Program } from 'estree';
 import { print } from 'esrap';
 import tsx from 'esrap/languages/tsx';
-import type { AnalyzedModule, ClassifiedSegment, SourceMapLike } from '../types.js';
+import type { AnalyzedModule, ClassifiedSegment, LazyCandidate, SourceMapLike } from '../types.js';
 import { resolveImports } from './import-resolver.js';
 import { generateChunkModule } from './chunk-module.js';
 import { replaceWithStub, type ExtractableNode } from './client-stub.js';
+import { applyLazyTransforms } from './lazy-transform.js';
 
 export interface ExtractionResult {
   clientCode: string;
@@ -26,6 +27,7 @@ export function extractModule(
   _sourceCode: string,
   confidenceThreshold: number,
   sourceFilePath: string,
+  lazyCandidates?: LazyCandidate[],
 ): ExtractionResult | null {
   const extractable = segments.filter(
     (seg) =>
@@ -33,7 +35,10 @@ export function extractModule(
       seg.confidence >= confidenceThreshold,
   );
 
-  if (extractable.length === 0) return null;
+  const hasLazyTransforms = lazyCandidates && lazyCandidates.length > 0;
+
+  // Nothing to do if no handler extractions and no lazy transforms
+  if (extractable.length === 0 && !hasLazyTransforms) return null;
 
   // Deep-copy the full AST for client code mutation
   const clientAST = structuredClone(analyzed.ast) as Program;
@@ -70,19 +75,27 @@ export function extractModule(
     extractedCount++;
   }
 
-  if (extractedCount === 0) return null;
+  // Apply React.lazy + Suspense transforms (after handler extraction)
+  if (hasLazyTransforms) {
+    applyLazyTransforms(clientAST, lazyCandidates!);
+  }
 
-  // Prepend `import { __phantom_lazy } from 'phantom-build/runtime'` to the client AST
-  const lazyImport = {
-    type: 'ImportDeclaration' as const,
-    specifiers: [{
-      type: 'ImportSpecifier' as const,
-      imported: { type: 'Identifier' as const, name: '__phantom_lazy' },
-      local: { type: 'Identifier' as const, name: '__phantom_lazy' },
-    }],
-    source: { type: 'Literal' as const, value: 'phantom-build/runtime' },
-  };
-  clientAST.body.unshift(lazyImport as Program['body'][number]);
+  // Bail if neither handler extraction nor lazy transforms produced changes
+  if (extractedCount === 0 && !hasLazyTransforms) return null;
+
+  // Prepend `import { __phantom_lazy } from 'phantom-build/runtime'` if handlers were extracted
+  if (extractedCount > 0) {
+    const lazyImport = {
+      type: 'ImportDeclaration' as const,
+      specifiers: [{
+        type: 'ImportSpecifier' as const,
+        imported: { type: 'Identifier' as const, name: '__phantom_lazy' },
+        local: { type: 'Identifier' as const, name: '__phantom_lazy' },
+      }],
+      source: { type: 'Literal' as const, value: 'phantom-build/runtime' },
+    };
+    clientAST.body.unshift(lazyImport as Program['body'][number]);
+  }
 
   // Generate client code with esrap (including source map)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- esrap tsx visitors expect TSESTree.Node, OXC produces compatible estree nodes

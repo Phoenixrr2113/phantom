@@ -1,8 +1,23 @@
-import { mkdirSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { basename, dirname } from 'node:path';
+import { createHash } from 'node:crypto';
 import { createUnplugin } from 'unplugin';
-import type { ManifestEntry, PhantomManifest, PhantomPluginOptions, SourceMapLike } from './types.js';
-import { analyzeModule } from './analyzer.js';
+import type {
+  AnalysisResult,
+  AnalyzedModule,
+  ClassifiedSegment,
+  ComponentProfile,
+  LazyCandidate,
+  ManifestEntry,
+  PhantomManifest,
+  PhantomPluginOptions,
+  PrefetchStrategy,
+  SourceMapLike,
+} from './types.js';
+import { parseModule } from './analyzer.js';
+import { classifyModule, detectLazyCandidates } from './classify/index.js';
+import { extractModule } from './extract/index.js';
+import { refineLazyCandidatesBatched } from './classify/llm-client.js';
 
 /** Prefix for Phantom virtual chunk modules */
 export const VIRTUAL_PREFIX = '\0phantom:';
@@ -10,14 +25,311 @@ export const VIRTUAL_PREFIX = '\0phantom:';
 /** Public prefix used in import statements (before resolution) */
 export const PUBLIC_PREFIX = 'phantom:';
 
+// ── LLM batch queue types ─────────────────────────────────────────────
+
+/**
+ * A module waiting for the batched LLM call to resolve.
+ * Stores everything needed to re-run extraction with refined candidates.
+ */
+interface PendingLazyModule {
+  id: string;
+  code: string;
+  parsed: AnalyzedModule;
+  segments: ClassifiedSegment[];
+  lazyCandidates: LazyCandidate[];
+  lazyKeptStatic: Array<{ localName: string; source: string; reason: string }>;
+  /** The heuristic result — used as fallback if LLM fails */
+  heuristicResult: AnalysisResult;
+  resolve: (result: AnalysisResult) => void;
+}
+
+/**
+ * Per-module stash of lazy candidate data for the LLM batch.
+ */
+interface LazyModuleStash {
+  candidates: LazyCandidate[];
+  keepStatic: Array<{ localName: string; source: string; reason: string }>;
+  parentComponent: string;
+  componentProfiles: Map<string, ComponentProfile> | undefined;
+  /** Hash of the source code for cache invalidation */
+  codeHash: string;
+}
+
+/**
+ * Serializable cache entry for a single module's LLM-refined decisions.
+ */
+interface CachedLazyDecision {
+  localName: string;
+  prefetch: PrefetchStrategy;
+  suspenseGroup: string | null;
+  reason: string;
+}
+
+interface LazyCacheEntry {
+  codeHash: string;
+  decisions: CachedLazyDecision[];
+  movedToStatic: string[];
+}
+
+interface LazyRefinementCache {
+  version: 1;
+  entries: Record<string, LazyCacheEntry>;
+}
+
+/**
+ * Default debounce window (ms) for collecting transforms before firing the LLM call.
+ * Transforms arriving within this window after the last transform are batched together.
+ * For an LLM call that takes 1-3 seconds, 50ms of collection overhead is negligible.
+ */
+const LLM_BATCH_DEBOUNCE_MS = 50;
+
 export const phantom = createUnplugin((options: PhantomPluginOptions = {}) => {
   // ── Shared state accumulated across transform calls ──────────────────
   const chunkModuleMap = new Map<string, { code: string; map: SourceMapLike }>();
   const manifestEntries: ManifestEntry[] = [];
   /** Reverse map: source file → virtual IDs it produced (for HMR cleanup) */
   const sourceToChunks = new Map<string, string[]>();
+  /** Cross-module component profiles for lazy detection (accumulated during transform) */
+  const componentProfiles = new Map<string, ComponentProfile>();
+  /**
+   * Re-export map: resolves barrel file imports to their actual source.
+   * Key: absolute path of the barrel file.
+   * Value: map of exported name → { source (relative), importedName }.
+   */
+  const reExportMap = new Map<string, Map<string, { source: string; importedName: string }>>();
   let moduleCount = 0;
   let modulesWithExtractions = 0;
+
+  /** LLM refinement cache loaded from disk at buildStart */
+  let refinementCache: LazyRefinementCache | null = null;
+
+  // ── DataLoader-style LLM batch queue ────────────────────────────────
+  // Multiple concurrent transform() calls enqueue here. After a debounce
+  // period with no new arrivals, a single batched LLM call is fired.
+  // All waiting transforms share the same Promise.
+
+  let pendingModules: PendingLazyModule[] = [];
+  let batchTimer: ReturnType<typeof setTimeout> | null = null;
+  let batchPromise: Promise<void> | null = null;
+  let batchResolve: (() => void) | null = null;
+
+  /** Lazy stash for the buildEnd manifest/cache update — accumulated as transforms complete */
+  const lazyStash = new Map<string, LazyModuleStash>();
+
+  function getCachePath(): string {
+    const manifestPath = options.manifestPath ?? 'phantom.manifest.json';
+    return manifestPath.replace(/\.json$/, '.lazy-cache.json');
+  }
+
+  /**
+   * Enqueue a module for batched LLM refinement.
+   * Returns a Promise that resolves with the LLM-refined AnalysisResult
+   * (or the heuristic result if LLM fails).
+   */
+  function enqueueLLMBatch(pending: Omit<PendingLazyModule, 'resolve'>): Promise<AnalysisResult> {
+    return new Promise<AnalysisResult>((resolve) => {
+      pendingModules.push({ ...pending, resolve });
+
+      // Reset the debounce timer — extend the collection window
+      if (batchTimer !== null) {
+        clearTimeout(batchTimer);
+      }
+
+      // Create the shared batch promise if this is the first arrival
+      if (!batchPromise) {
+        batchPromise = new Promise<void>((r) => { batchResolve = r; });
+      }
+
+      // Use microtask for single-module flushes (e.g., HMR) to avoid
+      // the 50ms debounce penalty when no other modules are arriving.
+      // If a second module arrives before the microtask fires, we switch
+      // to the debounce timer for proper batching.
+      if (pendingModules.length === 1) {
+        queueMicrotask(() => {
+          // Only flush if no other modules have arrived (still just 1)
+          if (pendingModules.length === 1 && batchTimer !== null) {
+            clearTimeout(batchTimer);
+            flushLLMBatch();
+          }
+        });
+      }
+
+      batchTimer = setTimeout(() => {
+        flushLLMBatch();
+      }, LLM_BATCH_DEBOUNCE_MS);
+    });
+  }
+
+  /**
+   * Flush the pending batch: fire ONE LLM call, then resolve all waiting transforms.
+   */
+  async function flushLLMBatch(): Promise<void> {
+    const batch = pendingModules;
+    const resolveAll = batchResolve;
+    pendingModules = [];
+    batchTimer = null;
+    batchPromise = null;
+    batchResolve = null;
+
+    if (batch.length === 0) {
+      resolveAll?.();
+      return;
+    }
+
+    // Build the stash for the LLM call
+    const moduleStash = new Map<string, {
+      candidates: LazyCandidate[];
+      keepStatic: Array<{ localName: string; source: string; reason: string }>;
+      parentComponent: string;
+      componentProfiles: Map<string, ComponentProfile> | undefined;
+    }>();
+
+    for (const mod of batch) {
+      moduleStash.set(mod.id, {
+        candidates: mod.lazyCandidates,
+        keepStatic: mod.lazyKeptStatic,
+        parentComponent: inferComponentName(mod.id),
+        componentProfiles,
+      });
+    }
+
+    if (!options.silent) {
+      const totalCandidates = batch.reduce((sum, m) => sum + m.lazyCandidates.length, 0);
+      console.log(
+        `[phantom] Running LLM refinement: ${totalCandidates} candidates from ${batch.length} module(s)`,
+      );
+    }
+
+    // Single batched LLM call
+    const { results, globalInsights } = await refineLazyCandidatesBatched(
+      moduleStash,
+      options.cerebrasApiKey!,
+      options.cerebrasModel,
+      options.confidenceThreshold,
+    );
+
+    if (!options.silent && globalInsights.length > 0) {
+      const lines = [`  LLM insights:`];
+      for (const insight of globalInsights) {
+        lines.push(`    - ${insight}`);
+      }
+      console.log(lines.join('\n'));
+    }
+
+    // Resolve each waiting transform with LLM-refined results
+    const confidenceThreshold = options.confidenceThreshold ?? 0.8;
+
+    for (const mod of batch) {
+      const llmResult = results.get(mod.id);
+
+      if (!llmResult) {
+        // LLM returned nothing for this module — use heuristic
+        mod.resolve(mod.heuristicResult);
+        continue;
+      }
+
+      const refinedCandidates = llmResult.updated;
+      const movedToStatic = llmResult.movedToStatic;
+
+      // If LLM moved some candidates to static or changed strategies,
+      // re-run extraction with refined candidates to get correct AST output
+      const candidatesChanged = hasLLMChanges(
+        mod.lazyCandidates,
+        refinedCandidates,
+        movedToStatic,
+      );
+
+      if (!candidatesChanged) {
+        // LLM confirmed all heuristic decisions — use the already-computed result
+        mod.resolve(mod.heuristicResult);
+        continue;
+      }
+
+      // Re-run extraction with refined candidates
+      const extracted = extractModule(
+        mod.parsed,
+        mod.segments,
+        mod.code,
+        confidenceThreshold,
+        mod.id,
+        refinedCandidates.length > 0 ? refinedCandidates : undefined,
+      );
+
+      if (extracted) {
+        mod.resolve({
+          path: mod.id,
+          segments: mod.segments,
+          hasExtractions: true,
+          clientCode: extracted.clientCode,
+          clientMap: extracted.clientMap,
+          chunkModules: extracted.chunkModules,
+          lazyCandidates: refinedCandidates.length > 0 ? refinedCandidates : undefined,
+          lazyKeptStatic: [
+            ...mod.lazyKeptStatic,
+            ...movedToStatic,
+          ],
+        });
+      } else {
+        // Extraction returned null — fall back to heuristic
+        mod.resolve(mod.heuristicResult);
+      }
+    }
+
+    // Write refinement cache for subsequent builds
+    writeLLMCache(batch, results);
+
+    resolveAll?.();
+  }
+
+  /**
+   * Write the LLM refinement cache so subsequent builds can skip the LLM call.
+   */
+  function writeLLMCache(
+    batch: PendingLazyModule[],
+    results: Map<string, {
+      updated: LazyCandidate[];
+      movedToStatic: Array<{ localName: string; source: string; reason: string }>;
+      insights: string[];
+    }>,
+  ): void {
+    const cachePath = getCachePath();
+    // Load existing cache to merge (other modules may already be cached)
+    let existingCache: LazyRefinementCache = { version: 1, entries: {} };
+    try {
+      if (existsSync(cachePath)) {
+        const raw = readFileSync(cachePath, 'utf-8');
+        const parsed = JSON.parse(raw) as LazyRefinementCache;
+        if (parsed.version === 1) {
+          existingCache = parsed;
+        }
+      }
+    } catch {
+      // Ignore
+    }
+
+    for (const mod of batch) {
+      const llmResult = results.get(mod.id);
+      if (!llmResult) continue;
+
+      existingCache.entries[mod.id] = {
+        codeHash: hashCode(mod.code),
+        decisions: llmResult.updated.map((c) => ({
+          localName: c.localName,
+          prefetch: c.prefetch,
+          suspenseGroup: c.suspenseGroup,
+          reason: c.reason,
+        })),
+        movedToStatic: llmResult.movedToStatic.map((m) => m.localName),
+      };
+    }
+
+    try {
+      mkdirSync(dirname(cachePath), { recursive: true });
+      writeFileSync(cachePath, JSON.stringify(existingCache, null, 2));
+    } catch {
+      // Cache write failure is non-fatal
+    }
+  }
 
   return {
     name: 'phantom',
@@ -28,15 +340,42 @@ export const phantom = createUnplugin((options: PhantomPluginOptions = {}) => {
       chunkModuleMap.clear();
       manifestEntries.length = 0;
       sourceToChunks.clear();
+      componentProfiles.clear();
+      reExportMap.clear();
+      lazyStash.clear();
+      pendingModules = [];
+      if (batchTimer !== null) {
+        clearTimeout(batchTimer);
+        batchTimer = null;
+      }
+      batchPromise = null;
+      batchResolve = null;
       moduleCount = 0;
       modulesWithExtractions = 0;
+
+      // Load LLM refinement cache if it exists and an API key is configured
+      refinementCache = null;
+      if (options.cerebrasApiKey) {
+        const cachePath = getCachePath();
+        try {
+          if (existsSync(cachePath)) {
+            const raw = readFileSync(cachePath, 'utf-8');
+            const parsed = JSON.parse(raw) as LazyRefinementCache;
+            if (parsed.version === 1) {
+              refinementCache = parsed;
+            }
+          }
+        } catch {
+          // Cache read failure is non-fatal
+        }
+      }
     },
 
     transformInclude(id: string) {
       return /\.[jt]sx?$/.test(id) && !id.includes('node_modules');
     },
 
-    transform(code: string, id: string) {
+    async transform(code: string, id: string) {
       moduleCount++;
 
       // HMR cleanup: remove stale chunks from a previous transform of this file
@@ -53,53 +392,148 @@ export const phantom = createUnplugin((options: PhantomPluginOptions = {}) => {
         }
         sourceToChunks.delete(id);
       }
+      lazyStash.delete(id);
 
-      let result;
+      // ── Phase 1: Parse + classify (always synchronous) ──────────────
+      let parsed: AnalyzedModule;
+      let segments: ClassifiedSegment[];
       try {
-        result = analyzeModule(code, id, options);
+        parsed = parseModule(code, id);
+        segments = classifyModule(parsed, code);
       } catch (err) {
-        // Parse errors or analysis failures should not crash the build.
-        // Log and skip — the file passes through unmodified.
         console.warn(`[phantom] Skipping ${id}:`, err instanceof Error ? err.message : err);
         return null;
       }
 
-      if (!result.hasExtractions || !result.clientCode || !result.chunkModules) {
+      // Build component profile for downstream modules
+      const profile = buildComponentProfile(segments);
+      if (profile) {
+        componentProfiles.set(id, profile);
+      }
+
+      // Record re-export mappings for barrel file resolution
+      if (parsed.reExports.length > 0) {
+        const mappings = new Map<string, { source: string; importedName: string }>();
+        for (const re of parsed.reExports) {
+          mappings.set(re.exportedName, { source: re.source, importedName: re.importedName });
+        }
+        reExportMap.set(id, mappings);
+      }
+
+      // ── Phase 2: Lazy candidate detection ───────────────────────────
+      let lazyCandidates: LazyCandidate[] | undefined;
+      let lazyKeptStatic: Array<{ localName: string; source: string; reason: string }> | undefined;
+
+      const enableLazy = options.enableLazy !== false;
+      if (enableLazy) {
+        const lazyResult = detectLazyCandidates(parsed, code, segments, componentProfiles, reExportMap);
+        if (lazyResult.lazy.length > 0) {
+          lazyCandidates = lazyResult.lazy;
+        }
+        if (lazyResult.keepStatic.length > 0) {
+          lazyKeptStatic = lazyResult.keepStatic;
+        }
+      }
+
+      // Apply cached LLM decisions if available (avoids LLM call entirely)
+      let usedCache = false;
+      if (lazyCandidates && lazyCandidates.length > 0 && refinementCache) {
+        const codeHash = hashCode(code);
+        const cached = refinementCache.entries[id];
+        if (cached && cached.codeHash === codeHash) {
+          applyCachedDecisions(lazyCandidates, cached);
+          usedCache = true;
+        }
+      }
+
+      // ── Phase 3: Extraction (handler chunks + lazy transforms) ──────
+      const confidenceThreshold = options.confidenceThreshold ?? 0.8;
+      const heuristicExtracted = extractModule(
+        parsed, segments, code, confidenceThreshold, id, lazyCandidates,
+      );
+
+      if (!heuristicExtracted) {
         return null;
       }
 
+      const heuristicResult: AnalysisResult = {
+        path: id,
+        segments,
+        hasExtractions: true,
+        clientCode: heuristicExtracted.clientCode,
+        clientMap: heuristicExtracted.clientMap,
+        chunkModules: heuristicExtracted.chunkModules,
+        lazyCandidates,
+        lazyKeptStatic,
+      };
+
+      // ── Phase 4: LLM refinement (async, batched) ───────────────────
+      // If we have lazy candidates, an API key, and no cache hit,
+      // enqueue for batched LLM refinement. The transform awaits the
+      // shared batch Promise and returns LLM-refined code.
+      const needsLLM = lazyCandidates &&
+                        lazyCandidates.length > 0 &&
+                        options.cerebrasApiKey &&
+                        !usedCache;
+
+      let finalResult: AnalysisResult;
+      if (needsLLM) {
+        finalResult = await enqueueLLMBatch({
+          id,
+          code,
+          parsed,
+          segments,
+          lazyCandidates: lazyCandidates!,
+          lazyKeptStatic: lazyKeptStatic ?? [],
+          heuristicResult,
+        });
+      } else {
+        finalResult = heuristicResult;
+      }
+
+      // ── Phase 5: Register results ──────────────────────────────────
       modulesWithExtractions++;
 
-      // Register each chunk module as a virtual module
       const newVirtualIds: string[] = [];
-      for (const chunkMod of result.chunkModules) {
+      for (const chunkMod of finalResult.chunkModules ?? []) {
         const virtualId = `${VIRTUAL_PREFIX}${chunkMod.id}.chunk.js`;
         chunkModuleMap.set(virtualId, { code: chunkMod.code, map: chunkMod.map });
         newVirtualIds.push(virtualId);
 
-        // Find the segment name from classified segments
-        const segment = result.segments.find((s) => s.id === chunkMod.id);
-
+        const segment = finalResult.segments.find((s) => s.id === chunkMod.id);
         manifestEntries.push({
           segmentId: chunkMod.id,
           sourceFile: id,
           virtualId,
           name: segment?.name ?? chunkMod.id,
+          kind: 'handler',
         });
       }
 
-      // Track which chunks this source file produced (for HMR cleanup)
+      if (finalResult.lazyCandidates) {
+        for (const lc of finalResult.lazyCandidates) {
+          manifestEntries.push({
+            segmentId: `lazy_${lc.localName}`,
+            sourceFile: id,
+            virtualId: lc.source,
+            name: `lazy(${lc.localName})`,
+            kind: 'lazy',
+          });
+        }
+      }
+
       sourceToChunks.set(id, newVirtualIds);
 
-      return { code: result.clientCode, map: result.clientMap ?? null };
+      return {
+        code: finalResult.clientCode!,
+        map: finalResult.clientMap ?? null,
+      };
     },
 
     resolveId(id: string) {
-      // Already resolved (has \0 prefix)
       if (id.startsWith(VIRTUAL_PREFIX)) {
         return id;
       }
-      // Public prefix — add \0 to mark as virtual
       if (id.startsWith(PUBLIC_PREFIX)) {
         return `\0${id}`;
       }
@@ -111,7 +545,6 @@ export const phantom = createUnplugin((options: PhantomPluginOptions = {}) => {
         const entry = chunkModuleMap.get(id);
         if (entry) return { code: entry.code, map: entry.map };
       }
-      // Webpack may pass the public prefix (without \0) after scheme resolution
       if (id.startsWith(PUBLIC_PREFIX)) {
         const virtualId = `${VIRTUAL_PREFIX}${id.slice(PUBLIC_PREFIX.length)}`;
         const entry = chunkModuleMap.get(virtualId);
@@ -128,13 +561,13 @@ export const phantom = createUnplugin((options: PhantomPluginOptions = {}) => {
         NormalModule.getCompilationHooks(compilation).readResource
           .for('phantom')
           .tapAsync('phantom', (_loaderContext: any, callback: any) => {
-            // Return empty — the load hook provides actual content
             callback(null, '');
           });
       });
     },
 
     buildEnd() {
+      // Write manifest
       const manifest: PhantomManifest = {
         version: 1,
         entries: manifestEntries,
@@ -152,13 +585,66 @@ export const phantom = createUnplugin((options: PhantomPluginOptions = {}) => {
         console.error(`[phantom] Failed to write manifest to "${manifestPath}":`, err);
       }
 
-      // Print build summary unless suppressed
       if (!options.silent) {
         printBuildSummary(moduleCount, modulesWithExtractions, manifestEntries, manifestPath);
       }
     },
   };
 });
+
+// ── Helpers ───────────────────────────────────────────────────────────
+
+/**
+ * Check if the LLM made any changes compared to heuristic decisions.
+ */
+function hasLLMChanges(
+  original: LazyCandidate[],
+  refined: LazyCandidate[],
+  movedToStatic: Array<{ localName: string; source: string; reason: string }>,
+): boolean {
+  if (movedToStatic.length > 0) return true;
+  if (original.length !== refined.length) return true;
+
+  for (const orig of original) {
+    const ref = refined.find((r) => r.localName === orig.localName);
+    if (!ref) return true;
+    if (orig.prefetch !== ref.prefetch) return true;
+    if (orig.suspenseGroup !== ref.suspenseGroup) return true;
+  }
+
+  return false;
+}
+
+function hashCode(code: string): string {
+  return createHash('sha256').update(code).digest('hex').slice(0, 16);
+}
+
+/**
+ * Apply cached LLM decisions to heuristic lazy candidates.
+ */
+function applyCachedDecisions(
+  candidates: LazyCandidate[],
+  cached: LazyCacheEntry,
+): void {
+  const decisionMap = new Map(
+    cached.decisions.map((d) => [d.localName, d]),
+  );
+
+  for (const candidate of candidates) {
+    const decision = decisionMap.get(candidate.localName);
+    if (decision) {
+      candidate.prefetch = decision.prefetch;
+      candidate.suspenseGroup = decision.suspenseGroup;
+      candidate.reason = `cached LLM: ${decision.reason}`;
+    }
+  }
+}
+
+function inferComponentName(filePath: string): string {
+  const base = basename(filePath);
+  const dotIdx = base.indexOf('.');
+  return dotIdx > 0 ? base.slice(0, dotIdx) : base;
+}
 
 // ── Build summary ──────────────────────────────────────────────────────
 
@@ -173,12 +659,18 @@ function printBuildSummary(
     return;
   }
 
+  const handlerEntries = entries.filter((e) => e.kind === 'handler');
+  const lazyEntries = entries.filter((e) => e.kind === 'lazy');
+
   const lines: string[] = [];
   lines.push(`[phantom] Build complete`);
   lines.push(`  Modules scanned: ${totalModules}`);
-  lines.push(`  Handlers extracted: ${entries.length} from ${extractedModules} module${extractedModules === 1 ? '' : 's'}`);
+  lines.push(`  Modules with extractions: ${extractedModules}`);
+  lines.push(`  Handlers extracted: ${handlerEntries.length}`);
+  if (lazyEntries.length > 0) {
+    lines.push(`  Lazy components: ${lazyEntries.length}`);
+  }
 
-  // Group by source file
   const bySource = new Map<string, string[]>();
   for (const entry of entries) {
     let names = bySource.get(entry.sourceFile);
@@ -196,4 +688,29 @@ function printBuildSummary(
   lines.push(`  Manifest: ${manifestPath}`);
 
   console.log(lines.join('\n'));
+}
+
+// ── Component profiling ───────────────────────────────────────────────
+
+function buildComponentProfile(segments: ClassifiedSegment[]): ComponentProfile | null {
+  if (!segments || segments.length === 0) return null;
+
+  const handlerSegments = segments.filter(
+    (s) => s.classification === 'EventHandler',
+  );
+  const hasEffects = segments.some((s) =>
+    s.reasons.some((r) => r.includes('useEffect') || r.includes('useLayoutEffect')),
+  );
+  const hasState = segments.some((s) =>
+    s.dependencies.some((d) => d.startsWith('set') || d === 'dispatch'),
+  );
+
+  return {
+    hasHandlers: handlerSegments.length > 0,
+    hasState,
+    hasEffects,
+    handlerCount: handlerSegments.length,
+    providesContext: false,
+    estimatedSize: 0,
+  };
 }

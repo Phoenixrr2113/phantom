@@ -52,6 +52,18 @@ export interface AnalyzedModule {
   functions: FunctionDependency[];
   /** All import sources */
   imports: ImportInfo[];
+  /** Re-exports: `export { X } from './X'` pass-through mappings */
+  reExports: ReExportMapping[];
+}
+
+/** A single re-export mapping: `export { importedName as exportedName } from source` */
+export interface ReExportMapping {
+  /** The name exported from this module */
+  exportedName: string;
+  /** The name imported from the source module (e.g., "default" for `export { default as Foo }`) */
+  importedName: string;
+  /** The source module specifier */
+  source: string;
 }
 
 /** Import information */
@@ -89,6 +101,81 @@ export interface AnalysisResult {
   clientMap?: SourceMapLike;
   /** Generated lazy-loaded chunk modules */
   chunkModules?: Array<{ id: string; code: string; map: SourceMapLike }>;
+  /** Lazy component candidates (components that should be React.lazy wrapped) */
+  lazyCandidates?: LazyCandidate[];
+  /** Components kept static with reasons */
+  lazyKeptStatic?: Array<{ localName: string; source: string; reason: string }>;
+}
+
+/** Prefetch strategy for lazy-loaded components */
+export type PrefetchStrategy = 'immediate' | 'viewport' | 'interaction' | 'idle';
+
+/**
+ * A child component import that should be wrapped in React.lazy + Suspense.
+ * Produced by the lazy detection pass in classify/lazy.ts.
+ */
+export interface LazyCandidate {
+  /** Local binding name (e.g., "PaymentForm") */
+  localName: string;
+  /** Original import source as written in the module (e.g., "./components") */
+  source: string;
+  /**
+   * Resolved import source for the dynamic import, after barrel file resolution.
+   * When null/undefined, falls back to `source`.
+   * E.g., if `source` is "./components" (barrel) and the barrel re-exports
+   * PaymentForm from "./PaymentForm", resolvedSource is "./components/PaymentForm".
+   */
+  resolvedSource?: string;
+  /** Whether the original import was default, named, or namespace */
+  importKind: 'default' | 'named' | 'namespace';
+  /** For named imports, the exported name from the source module */
+  importedName: string | null;
+  /** All JSX locations where this component is used */
+  jsxUsages: Array<{ start: number; end: number }>;
+  /** Recommended loading strategy */
+  prefetch: PrefetchStrategy;
+  /**
+   * Group ID for components that should share a Suspense boundary.
+   * null = gets its own boundary.
+   */
+  suspenseGroup: string | null;
+  /** Whether this component is conditionally rendered */
+  conditional: boolean;
+  /** Render order position in the parent JSX container (0-indexed) */
+  jsxPosition: number;
+  /** Human-readable reason for the decision */
+  reason: string;
+}
+
+/** Result of lazy candidate detection */
+export interface LazyCandidateResult {
+  /** Components that should be lazified */
+  lazy: LazyCandidate[];
+  /** Components kept static, with reasons */
+  keepStatic: Array<{
+    localName: string;
+    source: string;
+    reason: string;
+  }>;
+}
+
+/**
+ * Cross-module component profile for informing lazy detection.
+ * Built from analyzing the imported component's module.
+ */
+export interface ComponentProfile {
+  /** Whether the component declares event handlers */
+  hasHandlers: boolean;
+  /** Whether the component uses useState/useReducer */
+  hasState: boolean;
+  /** Whether the component uses useEffect/useLayoutEffect */
+  hasEffects: boolean;
+  /** Number of event handlers in the component */
+  handlerCount: number;
+  /** Whether the component exports a React context (createContext) */
+  providesContext: boolean;
+  /** Estimated JS bundle size in bytes (0 if unknown) */
+  estimatedSize: number;
 }
 
 /** Plugin configuration options */
@@ -99,6 +186,14 @@ export interface PhantomPluginOptions {
   manifestPath?: string;
   /** Suppress build summary output (default: false) */
   silent?: boolean;
+  /** Enable React.lazy + Suspense wrapping for child components (default: true) */
+  enableLazy?: boolean;
+  /** Component profiles from prior analysis (for cross-module awareness) */
+  componentProfiles?: Map<string, ComponentProfile>;
+  /** Cerebras API key for LLM-assisted lazy optimization (optional) */
+  cerebrasApiKey?: string;
+  /** Cerebras model ID (default: "qwen-3-32b") */
+  cerebrasModel?: string;
 }
 
 /** A single entry in the Phantom manifest */
@@ -111,6 +206,8 @@ export interface ManifestEntry {
   virtualId: string;
   /** Human-readable segment name */
   name: string;
+  /** Type of extraction */
+  kind: 'handler' | 'lazy';
 }
 
 /** The full Phantom build manifest */

@@ -64,7 +64,7 @@ describe('phantom unplugin', () => {
   });
 
   describe('transform', () => {
-    it('returns null for client-only code (no extractions)', () => {
+    it('returns null for client-only code (no extractions)', async () => {
       const plugin = createPlugin();
       const code = `
         import { useEffect } from 'react';
@@ -73,14 +73,14 @@ describe('phantom unplugin', () => {
           return null;
         }
       `;
-      const result = (plugin.transform as Function).call(mockContext, code, 'app.tsx');
+      const result = await (plugin.transform as Function).call(mockContext, code, 'app.tsx');
       expect(result).toBeNull();
     });
 
-    it('returns rewritten client code for extractable module (event handlers)', () => {
+    it('returns rewritten client code for extractable module (event handlers)', async () => {
       const plugin = createPlugin();
       const code = fixture('event-handler.tsx');
-      const result = (plugin.transform as Function).call(mockContext, code, 'event-handler.tsx');
+      const result = await (plugin.transform as Function).call(mockContext, code, 'event-handler.tsx');
 
       expect(result).not.toBeNull();
       expect(result.code).toBeDefined();
@@ -91,18 +91,18 @@ describe('phantom unplugin', () => {
       expect(result.map.mappings.length).toBeGreaterThan(0);
     });
 
-    it('returns null for pure-only module (no event handlers)', () => {
+    it('returns null for pure-only module (no event handlers)', async () => {
       const plugin = createPlugin();
       const code = fixture('pure-memo.tsx');
-      const result = (plugin.transform as Function).call(mockContext, code, 'pure-memo.tsx');
+      const result = await (plugin.transform as Function).call(mockContext, code, 'pure-memo.tsx');
       // pure-memo.tsx has no event handlers, so no extraction
       expect(result).toBeNull();
     });
 
-    it('client code does NOT contain extracted handler logic', () => {
+    it('client code does NOT contain extracted handler logic', async () => {
       const plugin = createPlugin();
       const code = fixture('event-handler.tsx');
-      const result = (plugin.transform as Function).call(mockContext, code, 'event-handler.tsx');
+      const result = await (plugin.transform as Function).call(mockContext, code, 'event-handler.tsx');
 
       // The handler bodies should be replaced with lazy stubs
       expect(result.code).toContain('__phantom_lazy');
@@ -156,11 +156,11 @@ describe('phantom unplugin', () => {
   });
 
   describe('load', () => {
-    it('returns chunk code for known virtual module IDs', () => {
+    it('returns chunk code for known virtual module IDs', async () => {
       const plugin = createPlugin();
       // First, transform to populate chunkModuleMap
       const code = fixture('event-handler.tsx');
-      const transformResult = (plugin.transform as Function).call(
+      const transformResult = await (plugin.transform as Function).call(
         mockContext,
         code,
         'event-handler.tsx',
@@ -200,12 +200,12 @@ describe('phantom unplugin', () => {
   });
 
   describe('end-to-end flow', () => {
-    it('transform → resolveId → load produces parseable chunk modules', () => {
+    it('transform → resolveId → load produces parseable chunk modules', async () => {
       const plugin = createPlugin();
       const code = fixture('event-handler.tsx');
 
       // Step 1: Transform
-      const transformResult = (plugin.transform as Function).call(
+      const transformResult = await (plugin.transform as Function).call(
         mockContext,
         code,
         'event-handler.tsx',
@@ -244,10 +244,10 @@ describe('phantom unplugin', () => {
       }
     });
 
-    it('client code is parseable TSX', () => {
+    it('client code is parseable TSX', async () => {
       const plugin = createPlugin();
       const code = fixture('event-handler.tsx');
-      const result = (plugin.transform as Function).call(mockContext, code, 'event-handler.tsx');
+      const result = await (plugin.transform as Function).call(mockContext, code, 'event-handler.tsx');
 
       const parsed = parseSync('client.tsx', result.code, {
         lang: 'tsx',
@@ -256,10 +256,10 @@ describe('phantom unplugin', () => {
       expect(parsed.errors.length).toBe(0);
     });
 
-    it('mixed.tsx produces chunk modules via load', () => {
+    it('mixed.tsx produces chunk modules via load', async () => {
       const plugin = createPlugin();
       const code = fixture('mixed.tsx');
-      const result = (plugin.transform as Function).call(mockContext, code, 'mixed.tsx');
+      const result = await (plugin.transform as Function).call(mockContext, code, 'mixed.tsx');
       expect(result).not.toBeNull();
 
       const lazyCalls = [...result.code.matchAll(/import\('phantom:([^']+)\.chunk\.js'\)/g)];
@@ -283,10 +283,10 @@ describe('phantom unplugin', () => {
       expect(loadedCount).toBeGreaterThanOrEqual(1);
     });
 
-    it('pure-memo.tsx produces no chunk modules', () => {
+    it('pure-memo.tsx produces no chunk modules', async () => {
       const plugin = createPlugin();
       const code = fixture('pure-memo.tsx');
-      const result = (plugin.transform as Function).call(
+      const result = await (plugin.transform as Function).call(
         mockContext,
         code,
         'pure-memo.tsx',
@@ -307,12 +307,12 @@ describe('phantom unplugin', () => {
   });
 
   describe('production readiness', () => {
-    it('buildStart clears state for watch mode (no stale chunks)', () => {
+    it('buildStart clears state for watch mode (no stale chunks)', async () => {
       const plugin = createPlugin();
 
       // First build: transform a file to populate chunk state
       const code = fixture('event-handler.tsx');
-      const result1 = (plugin.transform as Function).call(mockContext, code, 'event-handler.tsx');
+      const result1 = await (plugin.transform as Function).call(mockContext, code, 'event-handler.tsx');
       expect(result1).not.toBeNull();
 
       // Extract a segment ID
@@ -333,12 +333,12 @@ describe('phantom unplugin', () => {
       expect((plugin.load as Function).call(mockContext, virtualId1)).toBeUndefined();
     });
 
-    it('re-transform cleans up stale chunks from previous version (HMR)', () => {
+    it('re-transform cleans up stale chunks from previous version (HMR)', async () => {
       const plugin = createPlugin();
 
       // First transform: extract handlers from event-handler.tsx
       const code1 = fixture('event-handler.tsx');
-      const result1 = (plugin.transform as Function).call(mockContext, code1, '/src/App.tsx');
+      const result1 = await (plugin.transform as Function).call(mockContext, code1, '/src/App.tsx');
       expect(result1).not.toBeNull();
 
       // Collect all chunk IDs from first transform
@@ -359,7 +359,7 @@ function App() {
   return <button onClick={handler}>New</button>;
 }
       `;
-      const result2 = (plugin.transform as Function).call(mockContext, code2, '/src/App.tsx');
+      const result2 = await (plugin.transform as Function).call(mockContext, code2, '/src/App.tsx');
       expect(result2).not.toBeNull();
 
       // Old chunks should be gone
@@ -376,27 +376,27 @@ function App() {
       }
     });
 
-    it('transform gracefully handles syntax errors (returns null, does not crash)', () => {
+    it('transform gracefully handles syntax errors (returns null, does not crash)', async () => {
       const plugin = createPlugin();
       const badCode = 'const x = {;'; // syntax error
-      const result = (plugin.transform as Function).call(mockContext, badCode, 'bad.tsx');
+      const result = await (plugin.transform as Function).call(mockContext, badCode, 'bad.tsx');
       // Should return null (skip), not throw
       expect(result).toBeNull();
     });
   });
 
   describe('build summary', () => {
-    it('prints summary with handler names and module counts', () => {
+    it('prints summary with handler names and module counts', async () => {
       const plugin = createPlugin();
       const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
 
       // Transform a file with extractable handlers
       const code = fixture('event-handler.tsx');
-      (plugin.transform as Function).call(mockContext, code, '/project/src/event-handler.tsx');
+      await (plugin.transform as Function).call(mockContext, code, '/project/src/event-handler.tsx');
 
       // Also transform a file with no extractions
       const pureCode = fixture('pure-memo.tsx');
-      (plugin.transform as Function).call(mockContext, pureCode, '/project/src/pure-memo.tsx');
+      await (plugin.transform as Function).call(mockContext, pureCode, '/project/src/pure-memo.tsx');
 
       // Call buildEnd to trigger summary
       (plugin.buildEnd as Function).call(mockContext);
@@ -406,19 +406,20 @@ function App() {
 
       expect(output).toContain('[phantom] Build complete');
       expect(output).toContain('Modules scanned: 2');
-      expect(output).toContain('from 1 module');
+      expect(output).toContain('Modules with extractions: 1');
+      expect(output).toContain('Handlers extracted: 3');
       expect(output).toContain('event-handler.tsx');
       expect(output).toContain('Manifest:');
 
       logSpy.mockRestore();
     });
 
-    it('silent option suppresses build summary', () => {
+    it('silent option suppresses build summary', async () => {
       const plugin = createPlugin({ silent: true });
       const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
 
       const code = fixture('event-handler.tsx');
-      (plugin.transform as Function).call(mockContext, code, '/project/src/event-handler.tsx');
+      await (plugin.transform as Function).call(mockContext, code, '/project/src/event-handler.tsx');
       (plugin.buildEnd as Function).call(mockContext);
 
       // log should NOT be called with phantom summary
@@ -430,13 +431,13 @@ function App() {
       logSpy.mockRestore();
     });
 
-    it('prints minimal summary when no handlers extracted', () => {
+    it('prints minimal summary when no handlers extracted', async () => {
       const plugin = createPlugin();
       const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
 
       // Transform only a pure module — no extractions
       const code = fixture('pure-memo.tsx');
-      (plugin.transform as Function).call(mockContext, code, '/project/src/pure-memo.tsx');
+      await (plugin.transform as Function).call(mockContext, code, '/project/src/pure-memo.tsx');
       (plugin.buildEnd as Function).call(mockContext);
 
       expect(logSpy).toHaveBeenCalled();
@@ -444,6 +445,85 @@ function App() {
       expect(output).toContain('no handlers extracted');
 
       logSpy.mockRestore();
+    });
+  });
+
+  describe('barrel file resolution', () => {
+    it('resolves lazy candidates through barrel file re-exports', async () => {
+      const plugin = createPlugin({ silent: true });
+
+      // Step 1: Transform the barrel file first (establishes re-export mappings)
+      const barrelCode = `
+export { PaymentForm } from './PaymentForm';
+export { AddressForm } from './AddressForm';
+export type { FormProps } from './types';
+      `;
+      await (plugin.transform as Function).call(
+        mockContext, barrelCode, '/project/src/components/index.ts',
+      );
+
+      // Step 2: Transform a route-level component that imports through the barrel.
+      // Components at positions 0-1 are above fold and kept static, so we need
+      // enough siblings to push our targets below fold (position >= 2).
+      const pageCode = `
+import React from 'react';
+import { PaymentForm, AddressForm } from './components';
+
+export default function CheckoutPage() {
+  return (
+    <div>
+      <header>Header</header>
+      <nav>Nav</nav>
+      <PaymentForm />
+      <AddressForm />
+    </div>
+  );
+}
+      `;
+      const result = await (plugin.transform as Function).call(
+        mockContext, pageCode, '/project/src/CheckoutPage.tsx',
+      );
+
+      // The lazy candidates should have been detected (below fold in route component)
+      expect(result).not.toBeNull();
+      // The output uses `lazy` imported from react, not `React.lazy`
+      expect(result.code).toContain('lazy');
+      expect(result.code).toContain('Suspense');
+
+      // The dynamic import should target the resolved component modules
+      // (resolved through the barrel), not the barrel file itself.
+      // e.g., import('./components/PaymentForm') not import('./components')
+      expect(result.code).toContain('./components/PaymentForm');
+      expect(result.code).toContain('./components/AddressForm');
+    });
+
+    it('falls back gracefully when barrel file has not been transformed yet', async () => {
+      const plugin = createPlugin({ silent: true });
+
+      // Transform the consumer WITHOUT the barrel being processed first.
+      // Needs enough siblings to push target below fold.
+      const pageCode = `
+import React from 'react';
+import { PaymentForm } from './components';
+
+export default function CheckoutPage() {
+  return (
+    <div>
+      <header>Header</header>
+      <nav>Nav</nav>
+      <PaymentForm />
+    </div>
+  );
+}
+      `;
+      // Should not throw — gracefully falls back to barrel file as source
+      const result = await (plugin.transform as Function).call(
+        mockContext, pageCode, '/project/src/CheckoutPage.tsx',
+      );
+
+      // Still produces lazy output (just using barrel as import source)
+      expect(result).not.toBeNull();
+      expect(result.code).toContain('lazy');
     });
   });
 });

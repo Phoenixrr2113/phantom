@@ -2,14 +2,16 @@ import { parseSync } from 'oxc-parser';
 import { analyze as analyzeScope } from 'eslint-scope';
 import type { Program, Node } from 'estree';
 import { addASTMetadata } from './ast-compat.js';
-import { classifyModule } from './classify/index.js';
+import { classifyModule, detectLazyCandidates } from './classify/index.js';
 import { extractModule } from './extract/index.js';
 import type {
   AnalyzedModule,
   AnalysisResult,
   FunctionDependency,
   ImportInfo,
+  LazyCandidate,
   PhantomPluginOptions,
+  ReExportMapping,
 } from './types.js';
 
 /**
@@ -57,13 +59,16 @@ export function parseModule(code: string, path: string): AnalyzedModule {
   // 4. Extract import information from OXC's module info
   const imports = extractImports(parseResult);
 
-  // 5. Build function dependency map from scope analysis
+  // 5. Extract re-export mappings (for barrel file resolution)
+  const reExports = extractReExports(parseResult);
+
+  // 6. Build function dependency map from scope analysis
   const functions = buildFunctionDependencies(scopeManager);
 
-  // 6. Resolve names for anonymous functions from assignment context
+  // 7. Resolve names for anonymous functions from assignment context
   resolveAnonymousNames(ast, functions);
 
-  return { path, ast, functions, imports };
+  return { path, ast, functions, imports, reExports };
 }
 
 /**
@@ -87,6 +92,39 @@ function extractImports(parseResult: ReturnType<typeof parseSync>): ImportInfo[]
           : 'named' as const,
     })),
   }));
+}
+
+/**
+ * Extract re-export mappings from OXC's module info.
+ * Detects `export { X } from './X'` and `export { default as Y } from './Y'` patterns.
+ * These are pass-through re-exports with no local binding (barrel files).
+ */
+function extractReExports(parseResult: ReturnType<typeof parseSync>): ReExportMapping[] {
+  const moduleInfo = parseResult.module;
+  if (!moduleInfo) return [];
+
+  const results: ReExportMapping[] = [];
+  for (const exp of moduleInfo.staticExports) {
+    for (const entry of exp.entries) {
+      // Skip type-only re-exports
+      if (entry.isType) continue;
+      // Only re-exports have localName.kind === 'None' (no local binding)
+      if (entry.localName.kind !== 'None') continue;
+      // Must have a module source (re-export from another module)
+      if (!entry.moduleRequest) continue;
+
+      const exportedName = entry.exportName.kind === 'Name' ? entry.exportName.name : null;
+      const importedName = entry.importName.kind === 'Name' ? entry.importName.name : null;
+      if (!exportedName || !importedName) continue;
+
+      results.push({
+        exportedName,
+        importedName,
+        source: entry.moduleRequest.value,
+      });
+    }
+  }
+  return results;
 }
 
 /**
@@ -306,9 +344,29 @@ export function analyzeModule(
   // Phase 3: classification
   const segments = classifyModule(parsed, code);
 
-  // Phase 4: extraction
+  // Phase 3.5: lazy candidate detection
+  let lazyCandidates: LazyCandidate[] | undefined;
+  let lazyKeptStatic: Array<{ localName: string; source: string; reason: string }> | undefined;
+
+  const enableLazy = _options?.enableLazy !== false; // default: true
+  if (enableLazy) {
+    const lazyResult = detectLazyCandidates(
+      parsed,
+      code,
+      segments,
+      _options?.componentProfiles,
+    );
+    if (lazyResult.lazy.length > 0) {
+      lazyCandidates = lazyResult.lazy;
+    }
+    if (lazyResult.keepStatic.length > 0) {
+      lazyKeptStatic = lazyResult.keepStatic;
+    }
+  }
+
+  // Phase 4: extraction (handler chunks + lazy transforms)
   const confidenceThreshold = _options?.confidenceThreshold ?? 0.8;
-  const extracted = extractModule(parsed, segments, code, confidenceThreshold, path);
+  const extracted = extractModule(parsed, segments, code, confidenceThreshold, path, lazyCandidates);
 
   if (extracted) {
     return {
@@ -318,6 +376,8 @@ export function analyzeModule(
       clientCode: extracted.clientCode,
       clientMap: extracted.clientMap,
       chunkModules: extracted.chunkModules,
+      lazyCandidates,
+      lazyKeptStatic,
     };
   }
 
@@ -325,5 +385,7 @@ export function analyzeModule(
     path,
     segments,
     hasExtractions: false,
+    lazyCandidates,
+    lazyKeptStatic,
   };
 }

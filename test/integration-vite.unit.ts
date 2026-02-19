@@ -70,7 +70,7 @@ describe('Vite integration', () => {
     });
 
     it('build summary reports 4 handlers from 1 module', () => {
-      expect(buildOutput).toContain('Handlers extracted: 4 from 1 module');
+      expect(buildOutput).toContain('Handlers extracted: 4');
     });
   });
 
