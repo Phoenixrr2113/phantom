@@ -1,7 +1,7 @@
 {
   "name": "phantom-build",
-  "version": "0.0.1",
-  "description": "Automatic React event handler extraction — classifies and splits event handlers into lazy-loaded chunks at handler-level granularity",
+  "version": "0.1.0",
+  "description": "Automatic code-splitting for React — extracts event handlers into lazy-loaded chunks and wraps below-fold components in React.lazy + Suspense at build time",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -24,18 +24,41 @@
     }
   },
   "bin": {
-    "phantom": "./dist/cli.js"
+    "phantom": "dist/cli.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "README.md"
   ],
   "scripts": {
     "build": "tsc",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint src/"
+    "lint": "eslint src/",
+    "prepublishOnly": "npm run build"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Phoenixrr2113/phantom.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Phoenixrr2113/phantom/issues"
+  },
+  "homepage": "https://github.com/Phoenixrr2113/phantom#readme",
+  "keywords": [
+    "react",
+    "code-splitting",
+    "lazy-loading",
+    "vite",
+    "webpack",
+    "build-plugin",
+    "event-handlers",
+    "performance",
+    "suspense",
+    "unplugin"
+  ],
+  "author": "Randy Wilson",
   "dependencies": {
     "eslint-scope": "^8.3.0",
     "esrap": "^2.2.3",

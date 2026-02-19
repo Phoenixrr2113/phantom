@@ -4,7 +4,7 @@
 
 Phantom is a build plugin that analyzes your React code, extracts event handlers into lazy-loaded chunks, and wraps below-fold components in `React.lazy` + `Suspense` — all automatically, with zero config changes to your components.
 
-```
+```bash
 npm install phantom-build
 ```
 
