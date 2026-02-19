@@ -287,6 +287,8 @@ function analyzeRenderPath(
  * - `if (typeof window === 'undefined') { ... } else { ... }`
  * - `typeof window !== 'undefined' && expr` (short-circuit)
  * - `const isClient = typeof window !== 'undefined'`
+ * - Early return: `if (typeof window === 'undefined') return ...` (code after is browser-only)
+ * - Early return: `if (typeof window !== 'undefined') return ...` (code after is SSR-safe)
  *
  * Returns a Set of span keys ("start:end") for AST nodes that are
  * inside a browser-only guard (the consequent of the check).
@@ -327,7 +329,131 @@ function detectTypeofWindowGuards(ast: Node): Set<string> {
     }
   });
 
+  // Pattern 3 (Mini-CFG): Early return guards
+  // Detect `if (typeof window === 'undefined') { return ... }` WITHOUT an else,
+  // which makes all sibling statements after the if unreachable on the client.
+  // And the inverse: `if (typeof window !== 'undefined') { return ... }` WITHOUT else,
+  // which makes sibling statements after the if unreachable on the server (browser-only).
+  detectEarlyReturnGuards(ast, guardedSpans);
+
   return guardedSpans;
+}
+
+// ── Mini-CFG: Early Return Guard Detection ────────────────────────────
+
+/**
+ * Detect early-return guard patterns in function bodies.
+ *
+ * This is a targeted mini-CFG analysis that handles the common pattern:
+ *
+ *   function Component() {
+ *     if (typeof window === 'undefined') {
+ *       return <div>Server fallback</div>;
+ *     }
+ *     // Everything here is browser-only (unreachable during SSR)
+ *     const width = window.innerWidth;
+ *     return <div>{width}</div>;
+ *   }
+ *
+ * And the inverse:
+ *
+ *   function Component() {
+ *     if (typeof window !== 'undefined') {
+ *       return <div>{window.innerWidth}</div>;
+ *     }
+ *     // Everything here is SSR-only (unreachable on client)
+ *     return <div>Server content</div>;
+ *   }
+ *
+ * For each function body (BlockStatement), walks statements in order.
+ * When an if-statement with a typeof window check has a return in its
+ * consequent and no else branch, all subsequent sibling statements are
+ * marked as guarded (browser-only or SSR-only depending on the check direction).
+ */
+function detectEarlyReturnGuards(ast: Node, guardedSpans: Set<string>): void {
+  // Find all function bodies (BlockStatements that are function bodies)
+  walkNode(ast, (node) => {
+    if (
+      node.type === 'FunctionDeclaration' ||
+      node.type === 'FunctionExpression' ||
+      node.type === 'ArrowFunctionExpression'
+    ) {
+      const fn = node as Node & { body: Node };
+      if (fn.body.type === 'BlockStatement') {
+        detectEarlyReturnInBlock(fn.body, guardedSpans);
+      }
+    }
+  });
+}
+
+/**
+ * Walk a block statement's direct children looking for early return guards.
+ */
+function detectEarlyReturnInBlock(
+  block: Node,
+  guardedSpans: Set<string>,
+): void {
+  const body = (block as Node & { body?: Node[] }).body;
+  if (!body || !Array.isArray(body)) return;
+
+  for (let i = 0; i < body.length; i++) {
+    const stmt = body[i];
+    if (stmt.type !== 'IfStatement') continue;
+
+    const ifStmt = stmt as Node & {
+      test: Node;
+      consequent: Node;
+      alternate: Node | null;
+    };
+
+    // Only handle if-without-else (early return pattern)
+    if (ifStmt.alternate) continue;
+
+    // Check if the consequent contains a return statement at the top level
+    if (!blockContainsReturn(ifStmt.consequent)) continue;
+
+    // Determine what kind of guard this is
+    const isServerCheck = isTypeofWindowCheck(ifStmt.test, '===');
+    const isClientCheck = isTypeofWindowCheck(ifStmt.test, '!==');
+
+    if (!isServerCheck && !isClientCheck) continue;
+
+    // All subsequent sibling statements are unreachable for one side:
+    // - typeof window === 'undefined' + return → code after is browser-only (guarded)
+    // - typeof window !== 'undefined' + return → code after is SSR-only (safe, not guarded)
+    //
+    // For SSR boundary detection, we only care about marking browser-only code as guarded.
+    // When the check is `=== 'undefined'` (server check), code after return is client-only.
+    if (isServerCheck) {
+      for (let j = i + 1; j < body.length; j++) {
+        addSpansFromNode(body[j], guardedSpans);
+      }
+    }
+    // When the check is `!== 'undefined'` (client check) with a return,
+    // code after is server-only (safe). We don't need to guard it, but we DO
+    // need to mark the consequent (the return branch itself) as guarded since
+    // it's browser-only code.
+    // Note: The consequent is already guarded by the Pattern 1 detection above.
+
+    // Early return found — no need to check further statements in this block
+    break;
+  }
+}
+
+/**
+ * Check if a statement or block contains a return statement at its top level.
+ * Handles both bare return and block with return.
+ */
+function blockContainsReturn(node: Node): boolean {
+  if (node.type === 'ReturnStatement') return true;
+
+  if (node.type === 'BlockStatement') {
+    const body = (node as Node & { body?: Node[] }).body;
+    if (!body) return false;
+    return body.some((stmt) => stmt.type === 'ReturnStatement');
+  }
+
+  return false;
 }
 
 /**

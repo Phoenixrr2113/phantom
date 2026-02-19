@@ -268,6 +268,115 @@ describe('SSR boundary detection', () => {
     });
   });
 
+  describe('early return guard detection (mini-CFG)', () => {
+    it('classifies component with early return server guard as SSRSafe', () => {
+      // if (typeof window === 'undefined') return <fallback>
+      // Code after the return is browser-only → guarded
+      const result = analyzeSSR(`
+        export function EarlyReturnGuard() {
+          if (typeof window === 'undefined') {
+            return <div>Server fallback</div>;
+          }
+          const width = window.innerWidth;
+          return <span>Width: {width}</span>;
+        }
+      `);
+      const comp = compByName(result, 'EarlyReturnGuard');
+      expect(comp).toBeDefined();
+      expect(comp!.classification).toBe('SSRSafe');
+      expect(comp!.hasWindowGuards).toBe(true);
+      expect(comp!.renderPathBrowserAPIs).toHaveLength(0);
+    });
+
+    it('classifies component with early return server guard using bare return', () => {
+      // Same pattern but with bare `return <div>...` instead of block
+      const result = analyzeSSR(`
+        export function BareReturnGuard() {
+          if (typeof window === 'undefined') return <div>SSR</div>;
+          const ua = navigator.userAgent;
+          return <pre>{ua}</pre>;
+        }
+      `);
+      const comp = compByName(result, 'BareReturnGuard');
+      expect(comp).toBeDefined();
+      expect(comp!.classification).toBe('SSRSafe');
+      expect(comp!.hasWindowGuards).toBe(true);
+    });
+
+    it('handles early return guard with multiple statements after guard', () => {
+      const result = analyzeSSR(`
+        export function MultiStatementAfterGuard() {
+          if (typeof window === 'undefined') {
+            return <div>Loading...</div>;
+          }
+          const width = window.innerWidth;
+          const height = window.innerHeight;
+          const el = document.getElementById('root');
+          return <div>{width}x{height} {el?.className}</div>;
+        }
+      `);
+      const comp = compByName(result, 'MultiStatementAfterGuard');
+      expect(comp).toBeDefined();
+      expect(comp!.classification).toBe('SSRSafe');
+      expect(comp!.hasWindowGuards).toBe(true);
+    });
+
+    it('does not apply early return guard when else branch exists', () => {
+      // If there's an else branch, it's not an early return pattern
+      const result = analyzeSSR(`
+        export function NotEarlyReturn() {
+          if (typeof window === 'undefined') {
+            return <div>Server</div>;
+          } else {
+            const width = window.innerWidth;
+            return <span>{width}</span>;
+          }
+        }
+      `);
+      const comp = compByName(result, 'NotEarlyReturn');
+      expect(comp).toBeDefined();
+      // This should still be SSRSafe because the else is already guarded
+      // by the standard inverted guard detection (Pattern 1)
+      expect(comp!.classification).toBe('SSRSafe');
+      expect(comp!.hasWindowGuards).toBe(true);
+    });
+
+    it('classifies component with client-check early return correctly', () => {
+      // if (typeof window !== 'undefined') return <client-stuff>
+      // Code after is SSR-only (safe)
+      const result = analyzeSSR(`
+        export function ClientReturnGuard() {
+          if (typeof window !== 'undefined') {
+            return <div>{window.innerWidth}</div>;
+          }
+          return <div>Server rendered content</div>;
+        }
+      `);
+      const comp = compByName(result, 'ClientReturnGuard');
+      expect(comp).toBeDefined();
+      // The consequent (browser code) is already guarded by Pattern 1
+      // Code after the if is server-only (safe)
+      expect(comp!.classification).toBe('SSRSafe');
+      expect(comp!.hasWindowGuards).toBe(true);
+    });
+
+    it('handles early return guard with localStorage after guard', () => {
+      const result = analyzeSSR(`
+        export function StorageAfterGuard() {
+          if (typeof window === 'undefined') {
+            return <div>No storage on server</div>;
+          }
+          const val = localStorage.getItem('key') || 'default';
+          return <div>{val}</div>;
+        }
+      `);
+      const comp = compByName(result, 'StorageAfterGuard');
+      expect(comp).toBeDefined();
+      expect(comp!.classification).toBe('SSRSafe');
+      expect(comp!.hasWindowGuards).toBe(true);
+    });
+  });
+
   describe('fixture file: ssr-components.tsx', () => {
     const code = fixture('ssr-components.tsx');
 
