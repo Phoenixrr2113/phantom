@@ -417,6 +417,50 @@ import { PaymentForm, AddressForm } from './components';
 
 The generated `lazy()` calls will target the actual component modules (`./components/PaymentForm`), not the barrel file — producing optimal chunk splitting.
 
+## Benchmarks
+
+Tested against [shadcn-admin](https://github.com/satnaing/shadcn-admin) (11k+ stars) — a production-grade admin dashboard built with React 19, Vite 6, TanStack Router, and Shadcn UI.
+
+### Route-Level JS Reduction
+
+Phantom reduces the JavaScript that loads when navigating to each page. Shared dependencies (React, Radix, etc.) are identical between builds — only route-specific code changes.
+
+| Route | Baseline | Phantom | Reduction |
+|---|---|---|---|
+| Main layout (`_authenticated`) | 336 KB | 10.7 KB | **−97%** |
+| Settings → Account | 52.9 KB | 1.1 KB | **−98%** |
+| Auth → OTP | 12.6 KB | 1.2 KB | **−90%** |
+| Settings → Notifications | 7.1 KB | 1.0 KB | **−86%** |
+| Settings → Appearance | 4.3 KB | 1.0 KB | **−75%** |
+| **Total (29 routes)** | **480 KB** | **77.5 KB** | **−84%** |
+
+57 interaction handlers (modals, dialogs, dropdowns) are deferred to on-demand chunks totaling 5.3 KB. These load only when the user actually clicks.
+
+### Lighthouse (Simulated Slow 4G + 4× CPU Throttling)
+
+| Metric | Baseline | Phantom | Change |
+|---|---|---|---|
+| Total Blocking Time | 32 ms | 6 ms | **−83%** |
+| First Contentful Paint | 3.18 s | 3.18 s | — |
+| Performance Score | 80 | 79 | −1 |
+| Build Time | 3.7 s | 4.1 s | +8% |
+
+Total Blocking Time measures how long the main thread is locked and unable to respond to user input. Phantom reduces it by 83% because route chunks contain far less JavaScript to parse and compile.
+
+### Reproduce
+
+```bash
+# Clone the repo and install
+git clone https://github.com/Phoenixrr2113/phantom.git
+cd phantom && npm install && npm run build
+
+# Route chunk comparison
+node benchmarks/compare-routes.mjs
+
+# Lighthouse A/B comparison
+node benchmarks/lighthouse-compare.mjs --runs=5
+```
+
 ## Requirements
 
 - Node.js >= 18
