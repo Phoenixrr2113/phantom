@@ -1,0 +1,208 @@
+[
+  {
+    "project": "shadcn-admin",
+    "matchedRoutes": [
+      {
+        "route": "_authenticated",
+        "baselineSize": 344423,
+        "phantomSize": 10946,
+        "saved": 333477
+      },
+      {
+        "route": "_authenticated/settings/account",
+        "baselineSize": 54209,
+        "phantomSize": 1079,
+        "saved": 53130
+      },
+      {
+        "route": "(auth)/otp",
+        "baselineSize": 12919,
+        "phantomSize": 1269,
+        "saved": 11650
+      },
+      {
+        "route": "_authenticated/settings/notifications",
+        "baselineSize": 7250,
+        "phantomSize": 1049,
+        "saved": 6201
+      },
+      {
+        "route": "_authenticated/settings/appearance",
+        "baselineSize": 4354,
+        "phantomSize": 1071,
+        "saved": 3283
+      },
+      {
+        "route": "_authenticated/settings",
+        "baselineSize": 3385,
+        "phantomSize": 1061,
+        "saved": 2324
+      },
+      {
+        "route": "(auth)/sign-up",
+        "baselineSize": 3353,
+        "phantomSize": 1604,
+        "saved": 1749
+      },
+      {
+        "route": "_authenticated/settings/display",
+        "baselineSize": 1776,
+        "phantomSize": 889,
+        "saved": 887
+      },
+      {
+        "route": "_authenticated/chats",
+        "baselineSize": 17124,
+        "phantomSize": 16324,
+        "saved": 800
+      },
+      {
+        "route": "(auth)/forgot-password",
+        "baselineSize": 1838,
+        "phantomSize": 1312,
+        "saved": 526
+      },
+      {
+        "route": "_authenticated/settings/route",
+        "baselineSize": 3157,
+        "phantomSize": 2897,
+        "saved": 260
+      },
+      {
+        "route": "_authenticated/route",
+        "baselineSize": 501,
+        "phantomSize": 363,
+        "saved": 138
+      },
+      {
+        "route": "clerk/_authenticated/route",
+        "baselineSize": 501,
+        "phantomSize": 363,
+        "saved": 138
+      },
+      {
+        "route": "clerk/route",
+        "baselineSize": 4119,
+        "phantomSize": 4101,
+        "saved": 18
+      },
+      {
+        "route": "clerk/(auth)/route",
+        "baselineSize": 3728,
+        "phantomSize": 3728,
+        "saved": 0
+      },
+      {
+        "route": "_authenticated/help-center",
+        "baselineSize": 1060,
+        "phantomSize": 1060,
+        "saved": 0
+      },
+      {
+        "route": "clerk/(auth)/sign-in",
+        "baselineSize": 286,
+        "phantomSize": 286,
+        "saved": 0
+      },
+      {
+        "route": "clerk/(auth)/sign-up",
+        "baselineSize": 222,
+        "phantomSize": 222,
+        "saved": 0
+      },
+      {
+        "route": "(errors)/401",
+        "baselineSize": 115,
+        "phantomSize": 115,
+        "saved": 0
+      },
+      {
+        "route": "(errors)/503",
+        "baselineSize": 114,
+        "phantomSize": 114,
+        "saved": 0
+      },
+      {
+        "route": "(errors)/403",
+        "baselineSize": 106,
+        "phantomSize": 106,
+        "saved": 0
+      },
+      {
+        "route": "(errors)/404",
+        "baselineSize": 74,
+        "phantomSize": 74,
+        "saved": 0
+      },
+      {
+        "route": "(errors)/500",
+        "baselineSize": 74,
+        "phantomSize": 74,
+        "saved": 0
+      },
+      {
+        "route": "clerk/_authenticated/user-management",
+        "baselineSize": 4460,
+        "phantomSize": 4573,
+        "saved": -113
+      },
+      {
+        "route": "_authenticated/errors/$error",
+        "baselineSize": 1272,
+        "phantomSize": 1456,
+        "saved": -184
+      },
+      {
+        "route": "_authenticated/apps",
+        "baselineSize": 15622,
+        "phantomSize": 15870,
+        "saved": -248
+      },
+      {
+        "route": "(auth)/sign-in-2",
+        "baselineSize": 2172,
+        "phantomSize": 2500,
+        "saved": -328
+      },
+      {
+        "route": "(auth)/sign-in",
+        "baselineSize": 1234,
+        "phantomSize": 1573,
+        "saved": -339
+      },
+      {
+        "route": "_authenticated/users",
+        "baselineSize": 1946,
+        "phantomSize": 3243,
+        "saved": -1297
+      }
+    ],
+    "totalBaseline": 491394,
+    "totalPhantom": 79322,
+    "totalSaved": 412072,
+    "phantomChunks": 57,
+    "phantomChunkTotal": 5422
+  },
+  {
+    "project": "bulletproof-react",
+    "matchedRoutes": [
+      {
+        "route": "src/testing/mocks/browser",
+        "baselineSize": 69690,
+        "phantomSize": 69691,
+        "saved": -1
+      },
+      {
+        "route": "app/profile",
+        "baselineSize": 2839,
+        "phantomSize": 3098,
+        "saved": -259
+      }
+    ],
+    "totalBaseline": 72529,
+    "totalPhantom": 72789,
+    "totalSaved": -260,
+    "phantomChunks": 7,
+    "phantomChunkTotal": 18443
+  }
+]
