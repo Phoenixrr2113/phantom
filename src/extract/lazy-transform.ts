@@ -461,20 +461,46 @@ function ensureReactImports(ast: Program): void {
   ) as ImportDeclaration | undefined;
 
   if (reactImport) {
-    // Check which specifiers already exist
-    for (const spec of reactImport.specifiers) {
-      if (spec.type === 'ImportSpecifier') {
-        needed.delete((spec.imported as Identifier).name);
-      }
-    }
+    // Check if this is a namespace import (import * as React from 'react')
+    // — cannot mix namespace with named specifiers in the same declaration
+    const isNamespaceImport = reactImport.specifiers.some(
+      (s) => s.type === 'ImportNamespaceSpecifier',
+    );
 
-    // Add missing specifiers
-    for (const name of needed) {
-      reactImport.specifiers.push({
-        type: 'ImportSpecifier',
-        imported: { type: 'Identifier', name } as Identifier,
-        local: { type: 'Identifier', name } as Identifier,
-      });
+    if (isNamespaceImport) {
+      // Add a separate named import declaration for lazy/Suspense
+      const specifiers = [...needed].map((name) => ({
+        type: 'ImportSpecifier' as const,
+        imported: { type: 'Identifier' as const, name } as Identifier,
+        local: { type: 'Identifier' as const, name } as Identifier,
+      }));
+
+      const newImport: ImportDeclaration = {
+        type: 'ImportDeclaration',
+        specifiers,
+        source: { type: 'Literal', value: 'react' } as Literal,
+        attributes: [],
+      };
+
+      // Insert right after the existing react import
+      const idx = ast.body.indexOf(reactImport);
+      ast.body.splice(idx + 1, 0, newImport);
+    } else {
+      // Check which specifiers already exist
+      for (const spec of reactImport.specifiers) {
+        if (spec.type === 'ImportSpecifier') {
+          needed.delete((spec.imported as Identifier).name);
+        }
+      }
+
+      // Add missing specifiers
+      for (const name of needed) {
+        reactImport.specifiers.push({
+          type: 'ImportSpecifier',
+          imported: { type: 'Identifier', name } as Identifier,
+          local: { type: 'Identifier', name } as Identifier,
+        });
+      }
     }
   } else {
     // No react import exists — add one

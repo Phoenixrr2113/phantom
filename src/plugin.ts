@@ -96,6 +96,8 @@ export const phantom = createUnplugin((options: PhantomPluginOptions = {}) => {
   const manifestEntries: ManifestEntry[] = [];
   /** Reverse map: source file → virtual IDs it produced (for HMR cleanup) */
   const sourceToChunks = new Map<string, string[]>();
+  /** Reverse map: virtual chunk ID → source file that produced it (for alias resolution) */
+  const chunkToSource = new Map<string, string>();
   /** Cross-module component profiles for lazy detection (accumulated during transform) */
   const componentProfiles = new Map<string, ComponentProfile>();
   /**
@@ -352,6 +354,7 @@ export const phantom = createUnplugin((options: PhantomPluginOptions = {}) => {
       chunkModuleMap.clear();
       manifestEntries.length = 0;
       sourceToChunks.clear();
+      chunkToSource.clear();
       componentProfiles.clear();
       reExportMap.clear();
       lazyStash.clear();
@@ -547,6 +550,7 @@ export const phantom = createUnplugin((options: PhantomPluginOptions = {}) => {
       for (const chunkMod of finalResult.chunkModules ?? []) {
         const virtualId = `${VIRTUAL_PREFIX}${chunkMod.id}.chunk.js`;
         chunkModuleMap.set(virtualId, { code: chunkMod.code, map: chunkMod.map });
+        chunkToSource.set(virtualId, id);
         newVirtualIds.push(virtualId);
 
         const segment = finalResult.segments.find((s) => s.id === chunkMod.id);
@@ -589,12 +593,28 @@ export const phantom = createUnplugin((options: PhantomPluginOptions = {}) => {
       };
     },
 
-    resolveId(id: string) {
+    async resolveId(id: string, importer?: string) {
       if (id.startsWith(VIRTUAL_PREFIX)) {
         return id;
       }
       if (id.startsWith(PUBLIC_PREFIX)) {
         return `\0${id}`;
+      }
+      // When a chunk virtual module imports a non-relative, non-bare-package specifier
+      // (e.g. tsconfig path aliases like @/utils), delegate resolution to the bundler
+      // using the original source file as the importer context.
+      if (importer && importer.startsWith(VIRTUAL_PREFIX)) {
+        const originalSource = chunkToSource.get(importer);
+        if (originalSource) {
+          // unplugin doesn't expose this.resolve() in its types, but Vite/Rollup
+          // provide it at runtime on the plugin context
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const ctx = this as any;
+          if (typeof ctx.resolve === 'function') {
+            const resolved = await ctx.resolve(id, originalSource, { skipSelf: true });
+            if (resolved) return resolved;
+          }
+        }
       }
       return null;
     },

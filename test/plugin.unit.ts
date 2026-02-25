@@ -114,8 +114,8 @@ describe('phantom unplugin', () => {
   describe('resolveId', () => {
     const plugin = createPlugin();
 
-    it('resolves phantom: prefixed IDs by adding \\0', () => {
-      const result = (plugin.resolveId as Function).call(
+    it('resolves phantom: prefixed IDs by adding \\0', async () => {
+      const result = await (plugin.resolveId as Function).call(
         mockContext,
         'phantom:seg_abc123.chunk.js',
         undefined,
@@ -124,8 +124,8 @@ describe('phantom unplugin', () => {
       expect(result).toBe('\0phantom:seg_abc123.chunk.js');
     });
 
-    it('passes through \\0phantom: prefixed IDs (already resolved)', () => {
-      const result = (plugin.resolveId as Function).call(
+    it('passes through \\0phantom: prefixed IDs (already resolved)', async () => {
+      const result = await (plugin.resolveId as Function).call(
         mockContext,
         '\0phantom:seg_abc123.chunk.js',
         undefined,
@@ -134,8 +134,8 @@ describe('phantom unplugin', () => {
       expect(result).toBe('\0phantom:seg_abc123.chunk.js');
     });
 
-    it('returns null for non-phantom IDs', () => {
-      const result = (plugin.resolveId as Function).call(
+    it('returns null for non-phantom IDs', async () => {
+      const result = await (plugin.resolveId as Function).call(
         mockContext,
         'react',
         undefined,
@@ -144,8 +144,8 @@ describe('phantom unplugin', () => {
       expect(result).toBeNull();
     });
 
-    it('returns null for regular file paths', () => {
-      const result = (plugin.resolveId as Function).call(
+    it('returns null for regular file paths', async () => {
+      const result = await (plugin.resolveId as Function).call(
         mockContext,
         './utils.ts',
         'src/app.tsx',
@@ -221,7 +221,7 @@ describe('phantom unplugin', () => {
 
         // Step 3: Resolve the virtual module
         const publicId = `phantom:${segId}.chunk.js`;
-        const resolvedId = (plugin.resolveId as Function).call(
+        const resolvedId = await (plugin.resolveId as Function).call(
           mockContext,
           publicId,
           'event-handler.tsx',
@@ -508,11 +508,11 @@ export default function CheckoutPage() {
       logSpy.mockRestore();
     });
 
-    it('resolveId and load still work in SSR mode (no crash)', () => {
+    it('resolveId and load still work in SSR mode (no crash)', async () => {
       const plugin = createPlugin({ ssr: true });
 
       // resolveId should still resolve phantom: prefixed IDs
-      const resolved = (plugin.resolveId as Function).call(
+      const resolved = await (plugin.resolveId as Function).call(
         mockContext, 'phantom:seg_abc.chunk.js', undefined, { isEntry: false },
       );
       expect(resolved).toBe('\0phantom:seg_abc.chunk.js');

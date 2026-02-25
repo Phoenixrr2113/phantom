@@ -1,0 +1,48 @@
+[
+  {
+    "project": "shadcn-admin",
+    "baseline": {
+      "bundleSizeBytes": 3455338,
+      "bundleSize": "3.30 MB",
+      "jsChunks": 84,
+      "buildTimeMs": 4315
+    },
+    "phantom": {
+      "bundleSizeBytes": 3502864,
+      "bundleSize": "3.34 MB",
+      "jsChunks": 189,
+      "buildTimeMs": 4645,
+      "handlersExtracted": 73,
+      "componentsLazified": 36,
+      "totalExtractions": 109
+    },
+    "delta": {
+      "bundleSizePct": "1.4%",
+      "buildTimeOverheadPct": "7.7%",
+      "newChunks": 105
+    }
+  },
+  {
+    "project": "bulletproof-react (react-vite)",
+    "baseline": {
+      "bundleSizeBytes": 1404742,
+      "bundleSize": "1.34 MB",
+      "jsChunks": 14,
+      "buildTimeMs": 2966
+    },
+    "phantom": {
+      "bundleSizeBytes": 1418437,
+      "bundleSize": "1.35 MB",
+      "jsChunks": 25,
+      "buildTimeMs": 3123,
+      "handlersExtracted": 16,
+      "componentsLazified": 14,
+      "totalExtractions": 30
+    },
+    "delta": {
+      "bundleSizePct": "1.0%",
+      "buildTimeOverheadPct": "5.3%",
+      "newChunks": 11
+    }
+  }
+]
