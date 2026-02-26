@@ -1,3 +1,9 @@
 # Cloned benchmark projects (large, re-cloned by run.mjs)
 shadcn-admin/
 bulletproof-react/
+
+# Benchmark results
+results/
+lighthouse-results/
+route-comparison/
+spx-results/

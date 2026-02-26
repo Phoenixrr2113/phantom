@@ -78,7 +78,6 @@ function detectSyncEventCalls(astNode: ExtractableNode): string[] {
  * Generates:
  *   e.preventDefault();       // only if detected
  *   e.stopPropagation();      // only if detected
- *   e.persist?.();            // always when handler has event param
  */
 function buildPrelude(
   paramName: string,
@@ -142,10 +141,10 @@ function extractParamNames(params: Pattern[]): string[] {
  *     (e) => $p('seg_xxx', e, ...captured)
  *
  *   Arrow (with prelude):
- *     (e) => { e.preventDefault(); e.persist?.(); $p('seg_xxx', e, ...captured); }
+ *     (e) => { e.preventDefault(); $p('seg_xxx', e, ...captured); }
  *
  *   FunctionExpression / FunctionDeclaration (always block body):
- *     function f(e) { e.preventDefault(); e.persist?.(); $p('seg_xxx', e, ...captured); }
+ *     function f(e) { e.preventDefault(); $p('seg_xxx', e, ...captured); }
  */
 export function replaceWithStub(
   astNode: ExtractableNode,

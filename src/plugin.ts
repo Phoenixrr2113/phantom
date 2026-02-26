@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, existsSync, statSync } from 'node:fs';
 import { basename, dirname, resolve as pathResolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
@@ -460,7 +460,7 @@ export const phantom = createUnplugin((options: PhantomPluginOptions = {}) => {
       }
 
       // Build component profile for downstream modules
-      const profile = buildComponentProfile(segments);
+      const profile = buildComponentProfile(segments, code.length);
       if (profile) {
         componentProfiles.set(id, profile);
       }
@@ -480,6 +480,34 @@ export const phantom = createUnplugin((options: PhantomPluginOptions = {}) => {
 
       const enableLazy = options.enableLazy !== false;
       if (enableLazy) {
+        // Pre-populate profiles for imports not yet processed.
+        // In production builds, Rollup transforms parents before children,
+        // so child profiles aren't available yet. Use source file size as a
+        // conservative size estimate for the JS cost threshold check.
+        const moduleDir = dirname(id);
+        const PROFILE_EXTS = ['.tsx', '.ts', '.jsx', '.js', '/index.tsx', '/index.ts', '/index.jsx', '/index.js', ''];
+        for (const imp of parsed.imports) {
+          if (!imp.source.startsWith('./') && !imp.source.startsWith('../')) continue;
+          for (const ext of PROFILE_EXTS) {
+            const candidate = pathResolve(moduleDir, imp.source + ext);
+            if (componentProfiles.has(candidate)) break;
+            try {
+              const st = statSync(candidate);
+              if (st.isFile()) {
+                componentProfiles.set(candidate, {
+                  hasHandlers: false,
+                  hasState: false,
+                  hasEffects: false,
+                  handlerCount: 0,
+                  providesContext: false,
+                  estimatedSize: st.size,
+                });
+                break;
+              }
+            } catch { /* try next extension */ }
+          }
+        }
+
         const lazyResult = detectLazyCandidates(parsed, code, segments, componentProfiles, reExportMap);
         if (lazyResult.lazy.length > 0) {
           lazyCandidates = lazyResult.lazy;
@@ -875,7 +903,7 @@ function printBuildSummary(
 
 // ── Component profiling ───────────────────────────────────────────────
 
-function buildComponentProfile(segments: ClassifiedSegment[]): ComponentProfile | null {
+function buildComponentProfile(segments: ClassifiedSegment[], sourceBytes: number): ComponentProfile | null {
   if (!segments || segments.length === 0) return null;
 
   const handlerSegments = segments.filter(
@@ -894,7 +922,7 @@ function buildComponentProfile(segments: ClassifiedSegment[]): ComponentProfile 
     hasEffects,
     handlerCount: handlerSegments.length,
     providesContext: false,
-    estimatedSize: 0,
+    estimatedSize: sourceBytes,
   };
 }
 

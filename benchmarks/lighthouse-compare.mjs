@@ -22,6 +22,28 @@ const RESULTS_DIR = join(ROOT, 'lighthouse-results');
 
 const RUNS = parseInt(process.argv.find(a => a.startsWith('--runs='))?.split('=')[1] || '3');
 
+// Minimal 1×1 PNG (70 bytes) used as placeholder for missing avatar images.
+// Without these, `serve -s` returns index.html (~2.4KB) for every missing
+// image, inflating Lighthouse's totalByteWeight metric.
+const TINY_PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVQI12NgAAIABQAB' +
+  'Nl7BcQAAAABJRU5ErkJggg==',
+  'base64',
+);
+
+/** Ensure placeholder avatar images exist in a dist directory. */
+function ensureAvatarPlaceholders(distDir) {
+  const avatarDir = join(distDir, 'avatars');
+  mkdirSync(avatarDir, { recursive: true });
+  for (const name of ['01.png', '02.png', '03.png', '04.png', '05.png']) {
+    const p = join(avatarDir, name);
+    if (!existsSync(p)) writeFileSync(p, TINY_PNG);
+  }
+  // shadcn.jpg referenced in some components
+  const jpg = join(avatarDir, 'shadcn.jpg');
+  if (!existsSync(jpg)) writeFileSync(jpg, TINY_PNG);
+}
+
 // ── Helpers ─────────────────────────────────────────────────────────────
 
 function sleep(ms) {
@@ -39,7 +61,7 @@ function startServer(distDir, port) {
 function buildBaseline() {
   console.log('  Building baseline...');
   const distDir = join(SHADCN_DIR, 'dist-baseline');
-  if (existsSync(distDir)) return distDir; // reuse existing build
+  if (existsSync(distDir)) { ensureAvatarPlaceholders(distDir); return distDir; }
 
   const dist = join(SHADCN_DIR, 'dist');
   if (existsSync(dist)) rmSync(dist, { recursive: true, force: true });
@@ -52,13 +74,14 @@ function buildBaseline() {
   });
 
   execSync(`cp -r "${dist}" "${distDir}"`);
+  ensureAvatarPlaceholders(distDir);
   return distDir;
 }
 
 function buildPhantom() {
   console.log('  Building with phantom...');
   const distDir = join(SHADCN_DIR, 'dist-phantom');
-  if (existsSync(distDir)) return distDir; // reuse existing build
+  if (existsSync(distDir)) { ensureAvatarPlaceholders(distDir); return distDir; }
 
   const original = readFileSync(CONFIG_PATH, 'utf-8');
   let config = `import phantom from '${PHANTOM_ROOT}/dist/vite.js';\n` + original;
@@ -83,6 +106,7 @@ function buildPhantom() {
   }
 
   execSync(`cp -r "${dist}" "${distDir}"`);
+  ensureAvatarPlaceholders(distDir);
   return distDir;
 }
 

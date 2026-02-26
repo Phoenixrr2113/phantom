@@ -15,12 +15,13 @@ type ReExportMap = Map<string, Map<string, { source: string; importedName: strin
 // ── Constants ───────────────────────────────────────────────────────────
 
 /**
- * Minimum estimated JS cost (bytes) for a component to be worth lazifying.
- * Below this threshold, the Suspense boundary overhead exceeds the savings.
- * React.lazy + Suspense adds ~200 bytes of wrapper code plus a loading
- * waterfall step — not worth it for tiny leaf components.
+ * Minimum estimated source size (bytes) for a component to be worth lazifying.
+ * Below this threshold, the Suspense boundary overhead (~200 bytes of wrapper
+ * code plus a loading waterfall step) exceeds the savings from code-splitting.
+ * Source files under 512 bytes are typically tiny leaf components, icons, or
+ * re-export wrappers where lazy loading would be counter-productive.
  */
-const MIN_JS_COST_BYTES = 3072; // 3KB
+const MIN_JS_COST_BYTES = 512;
 
 /**
  * JSX position threshold: children at or above this index in a route-level
@@ -119,7 +120,7 @@ export function detectLazyCandidates(
       keepStatic.push({
         localName: imp.localName,
         source: imp.source,
-        reason: `Low JS cost (${profile.estimatedSize}B, no handlers/effects) — Suspense overhead exceeds savings`,
+        reason: `Low JS cost (${profile.estimatedSize}B < ${MIN_JS_COST_BYTES}B threshold) — Suspense overhead exceeds savings`,
       });
       continue;
     }
@@ -618,12 +619,12 @@ function buildReason(
 // ── Helpers ─────────────────────────────────────────────────────────────
 
 function hasSignificantJSCost(profile: ComponentProfile): boolean {
-  // A component is worth lazifying if it has meaningful JS to defer
-  if (profile.estimatedSize >= MIN_JS_COST_BYTES) return true;
-  if (profile.handlerCount > 0) return true;
-  if (profile.hasEffects) return true;
-  if (profile.hasState) return true;
-  return false;
+  // A component must have substantial JS cost to justify the overhead of
+  // a Suspense boundary + dynamic import chunk + loading waterfall step.
+  // Handler extraction already moves expensive handler code to on-demand
+  // chunks, and effects / state are cheap to keep inline — so we rely on
+  // total estimated size as the sole gating signal.
+  return profile.estimatedSize >= MIN_JS_COST_BYTES;
 }
 
 function isPascalCase(name: string): boolean {
