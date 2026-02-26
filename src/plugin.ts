@@ -271,6 +271,7 @@ export const phantom = createUnplugin((options: PhantomPluginOptions = {}) => {
         confidenceThreshold,
         mod.id,
         refinedCandidates.length > 0 ? refinedCandidates : undefined,
+        options.minHandlerSize ?? 200,
       );
 
       if (extracted) {
@@ -501,8 +502,9 @@ export const phantom = createUnplugin((options: PhantomPluginOptions = {}) => {
 
       // ── Phase 3: Extraction (handler chunks + lazy transforms) ──────
       const confidenceThreshold = options.confidenceThreshold ?? 0.8;
+      const minHandlerSize = options.minHandlerSize ?? 200;
       const heuristicExtracted = extractModule(
-        parsed, segments, code, confidenceThreshold, id, lazyCandidates,
+        parsed, segments, code, confidenceThreshold, id, lazyCandidates, minHandlerSize,
       );
 
       if (!heuristicExtracted) {
@@ -711,7 +713,7 @@ export const phantom = createUnplugin((options: PhantomPluginOptions = {}) => {
         }
       },
       transformIndexHtml(html: string) {
-        if (options.ssr || emittedGroupChunks.size === 0) return html;
+        if (options.ssr || options.preloadStrategy !== 'idle' || emittedGroupChunks.size === 0) return html;
         // Build idle preload script
         const base = resolvedBase.endsWith('/') ? resolvedBase : resolvedBase + '/';
         const chunkPaths = [...emittedGroupChunks.values()].map(

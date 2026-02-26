@@ -45,16 +45,16 @@
         "saved": 1749
       },
       {
+        "route": "_authenticated/chats",
+        "baselineSize": 17124,
+        "phantomSize": 15912,
+        "saved": 1212
+      },
+      {
         "route": "_authenticated/settings/display",
         "baselineSize": 1776,
         "phantomSize": 889,
         "saved": 887
-      },
-      {
-        "route": "_authenticated/chats",
-        "baselineSize": 17124,
-        "phantomSize": 16294,
-        "saved": 830
       },
       {
         "route": "(auth)/forgot-password",
@@ -143,8 +143,8 @@
       {
         "route": "clerk/_authenticated/user-management",
         "baselineSize": 4460,
-        "phantomSize": 4573,
-        "saved": -113
+        "phantomSize": 4568,
+        "saved": -108
       },
       {
         "route": "_authenticated/errors/$error",
@@ -155,8 +155,8 @@
       {
         "route": "_authenticated/apps",
         "baselineSize": 15622,
-        "phantomSize": 15864,
-        "saved": -242
+        "phantomSize": 15807,
+        "saved": -185
       },
       {
         "route": "(auth)/sign-in-2",
@@ -178,9 +178,9 @@
       }
     ],
     "totalBaseline": 491394,
-    "totalPhantom": 79286,
-    "totalSaved": 412108,
-    "phantomChunks": 33,
-    "phantomChunkTotal": 5800
+    "totalPhantom": 78842,
+    "totalSaved": 412552,
+    "phantomChunks": 3,
+    "phantomChunkTotal": 1616
   }
 ]

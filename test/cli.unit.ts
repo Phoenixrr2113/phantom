@@ -16,12 +16,12 @@ function runCLI(args: string): string {
 describe('phantom CLI', () => {
   describe('analyze command', () => {
     it('shows segment table for event-handler.tsx', () => {
-      const output = runCLI(`analyze ${join(FIXTURES_DIR, 'event-handler.tsx')}`);
+      const output = runCLI(`analyze ${join(FIXTURES_DIR, 'event-handler.tsx')} --min-handler-size 0`);
 
       expect(output).toContain('Phantom Analysis');
       expect(output).toContain('EventHandler');
       expect(output).toContain('Chunks extracted:');
-      // Should extract at least 3 handlers
+      // Should extract at least 3 handlers (with minHandlerSize=0 to include small test fixtures)
       expect(output).toMatch(/Chunks extracted: [3-9]/);
     });
 
@@ -61,7 +61,7 @@ describe('phantom CLI', () => {
     });
 
     it('shows chunk sizes in KB', () => {
-      const output = runCLI(`analyze ${join(FIXTURES_DIR, 'event-handler.tsx')}`);
+      const output = runCLI(`analyze ${join(FIXTURES_DIR, 'event-handler.tsx')} --min-handler-size 0`);
       expect(output).toMatch(/\d+\.\d KB/);
     });
   });

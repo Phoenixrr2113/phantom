@@ -13,8 +13,9 @@ Usage: phantom analyze <file> [options]
 Analyze a single file and print segment classification details.
 
 Options:
-  --threshold <number>   Confidence threshold for extraction (default: 0.8)
-  --help, -h             Show this help message
+  --threshold <number>          Confidence threshold for extraction (default: 0.8)
+  --min-handler-size <number>   Min handler bytes to extract (default: 200)
+  --help, -h                    Show this help message
 `.trim());
 }
 
@@ -52,6 +53,18 @@ function main(): void {
     threshold = val;
   }
 
+  // Parse --min-handler-size flag
+  let minHandlerSize: number | undefined;
+  const minSizeIdx = args.indexOf('--min-handler-size');
+  if (minSizeIdx !== -1) {
+    const val = parseInt(args[minSizeIdx + 1], 10);
+    if (isNaN(val) || val < 0) {
+      console.error('Error: --min-handler-size must be a non-negative integer');
+      process.exit(1);
+    }
+    minHandlerSize = val;
+  }
+
   // Read and analyze the file
   const absolutePath = resolve(filePath);
   let code: string;
@@ -62,7 +75,7 @@ function main(): void {
     process.exit(1);
   }
 
-  const result = analyzeModule(code, absolutePath, { confidenceThreshold: threshold });
+  const result = analyzeModule(code, absolutePath, { confidenceThreshold: threshold, minHandlerSize });
 
   // ── Output ───────────────────────────────────────────────────────
 

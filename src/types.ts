@@ -230,6 +230,18 @@ export interface PhantomPluginOptions {
   /** Cerebras model ID (default: "qwen-3-32b") */
   cerebrasModel?: string;
   /**
+   * Minimum handler body size in bytes to extract (default: 200).
+   * Handlers smaller than this threshold are left inline because the stub
+   * wrapper would add more bytes than the handler saves.
+   */
+  minHandlerSize?: number;
+  /**
+   * Preload strategy for handler chunks.
+   * - 'idle': inject requestIdleCallback modulepreload hints (downloads chunks during idle time)
+   * - 'none': load on-demand only when user interacts (default)
+   */
+  preloadStrategy?: 'idle' | 'none';
+  /**
    * SSR mode — skip all transforms so the server bundle gets original code
    * untouched for synchronous renderToString(). Default: false.
    *

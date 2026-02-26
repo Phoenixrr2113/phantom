@@ -14,8 +14,9 @@ function fixture(name: string): string {
  * Create a raw plugin instance with fresh state.
  * `phantom.raw` returns the UnpluginOptions object so we can call hooks directly.
  */
-function createPlugin(opts = {}) {
-  return phantom.raw(opts, { framework: 'vite' });
+function createPlugin(opts: Record<string, unknown> = {}) {
+  // Default minHandlerSize to 0 so small test fixtures still get extracted
+  return phantom.raw({ minHandlerSize: 0, ...opts }, { framework: 'vite' });
 }
 
 /** Minimal mock context for unplugin hooks that need `this` */
@@ -84,7 +85,7 @@ describe('phantom unplugin', () => {
 
       expect(result).not.toBeNull();
       expect(result.code).toBeDefined();
-      expect(result.code).toContain('__phantom_lazy');
+      expect(result.code).toContain('$p');
       // Source map is now a real map object (not null)
       expect(result.map).toBeDefined();
       expect(result.map.version).toBe(3);
@@ -105,7 +106,7 @@ describe('phantom unplugin', () => {
       const result = await (plugin.transform as Function).call(mockContext, code, 'event-handler.tsx');
 
       // The handler bodies should be replaced with lazy stubs
-      expect(result.code).toContain('__phantom_lazy');
+      expect(result.code).toContain('$p');
       // Client should still have the component structure
       expect(result.code).toContain('InteractiveComponent');
     });

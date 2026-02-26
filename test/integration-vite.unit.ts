@@ -75,9 +75,9 @@ describe('Vite integration', () => {
   });
 
   describe('main bundle', () => {
-    it('contains __phantom_lazy stubs', () => {
+    it('contains $p stubs', () => {
       const main = getMainBundle();
-      expect(main).toContain('__phantom_lazy');
+      expect(main).toContain('$p');
     });
 
     it('does NOT contain handler bodies (they were extracted)', () => {

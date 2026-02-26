@@ -23,7 +23,7 @@ export type ExtractableNode =
 /**
  * Event methods that must run synchronously during event dispatch.
  * If the handler calls these on its first parameter, the stub must
- * call them BEFORE the async __phantom_lazy() invocation.
+ * call them BEFORE the async $p() invocation.
  */
 const SYNC_EVENT_METHODS = new Set([
   'preventDefault',
@@ -105,23 +105,6 @@ function buildPrelude(
     });
   }
 
-  // Always add e.persist?.() for React <17 SyntheticEvent compat
-  stmts.push({
-    type: 'ExpressionStatement',
-    expression: {
-      type: 'CallExpression',
-      callee: {
-        type: 'MemberExpression',
-        object: { type: 'Identifier', name: paramName } as Identifier,
-        property: { type: 'Identifier', name: 'persist' } as Identifier,
-        computed: false,
-        optional: false,
-      } as MemberExpression,
-      arguments: [],
-      optional: true,  // e.persist?.() — optional chaining
-    } as CallExpression,
-  });
-
   return stmts;
 }
 
@@ -145,7 +128,7 @@ function extractParamNames(params: Pattern[]): string[] {
 // ── Stub generation ─────────────────────────────────────────────────────
 
 /**
- * Replace the function body with a __phantom_lazy() call + synchronous prelude.
+ * Replace the function body with a $p() call + synchronous prelude.
  *
  * Mutates the AST node in place.
  *
@@ -156,13 +139,13 @@ function extractParamNames(params: Pattern[]): string[] {
  * Output shapes:
  *
  *   Arrow (no prelude):
- *     (e) => __phantom_lazy('seg_xxx', e, ...captured)
+ *     (e) => $p('seg_xxx', e, ...captured)
  *
  *   Arrow (with prelude):
- *     (e) => { e.preventDefault(); e.persist?.(); __phantom_lazy('seg_xxx', e, ...captured); }
+ *     (e) => { e.preventDefault(); e.persist?.(); $p('seg_xxx', e, ...captured); }
  *
  *   FunctionExpression / FunctionDeclaration (always block body):
- *     function f(e) { e.preventDefault(); e.persist?.(); __phantom_lazy('seg_xxx', e, ...captured); }
+ *     function f(e) { e.preventDefault(); e.persist?.(); $p('seg_xxx', e, ...captured); }
  */
 export function replaceWithStub(
   astNode: ExtractableNode,
@@ -195,7 +178,7 @@ export function replaceWithStub(
 
   const lazyCall: CallExpression = {
     type: 'CallExpression',
-    callee: { type: 'Identifier', name: '__phantom_lazy' } as Identifier,
+    callee: { type: 'Identifier', name: '$p' } as Identifier,
     arguments: [
       importFactory as unknown as Identifier, // factory is first arg
       { type: 'Literal', value: segment.id } as Literal,
@@ -215,11 +198,10 @@ export function replaceWithStub(
     name,
   }));
 
-  // Build synchronous prelude. When the handler has an event parameter,
-  // we always add e.persist?.() for React <17 SyntheticEvent compat,
-  // even if no sync methods (preventDefault, etc.) were detected.
+  // Build synchronous prelude only when sync event methods were detected.
+  // React 17+ removed SyntheticEvent pooling, so persist() is no longer needed.
   const firstParamName = originalParamNames[0];
-  const hasPrelude = !!firstParamName;
+  const hasPrelude = syncMethods.length > 0 && !!firstParamName;
   const preludeStmts = hasPrelude
     ? buildPrelude(firstParamName, syncMethods)
     : [];
@@ -231,7 +213,7 @@ export function replaceWithStub(
   };
 
   if (hasPrelude || astNode.type === 'FunctionExpression' || astNode.type === 'FunctionDeclaration') {
-    // Block body: { prelude...; __phantom_lazy(...); }
+    // Block body: { prelude...; $p(...); }
     const blockBody: BlockStatement = {
       type: 'BlockStatement',
       body: [...preludeStmts, lazyStmt],
@@ -249,7 +231,7 @@ export function replaceWithStub(
     if ('returnType' in astNode) delete (astNode as Record<string, unknown>).returnType;
   } else {
     // ArrowFunctionExpression without prelude: expression body
-    // (e) => __phantom_lazy(...)
+    // (e) => $p(...)
     (astNode as unknown as { body: CallExpression }).body = lazyCall;
     (astNode as ArrowFunctionExpression).expression = true;
     astNode.params = stubParams;

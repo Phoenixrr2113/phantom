@@ -366,7 +366,8 @@ export function analyzeModule(
 
   // Phase 4: extraction (handler chunks + lazy transforms)
   const confidenceThreshold = _options?.confidenceThreshold ?? 0.8;
-  const extracted = extractModule(parsed, segments, code, confidenceThreshold, path, lazyCandidates);
+  const minHandlerSize = _options?.minHandlerSize ?? 200;
+  const extracted = extractModule(parsed, segments, code, confidenceThreshold, path, lazyCandidates, minHandlerSize);
 
   if (extracted) {
     return {

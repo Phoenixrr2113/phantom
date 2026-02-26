@@ -34,11 +34,13 @@ export function extractModule(
   confidenceThreshold: number,
   sourceFilePath: string,
   lazyCandidates?: LazyCandidate[],
+  minHandlerSize: number = 200,
 ): ExtractionResult | null {
   const extractable = segments.filter(
     (seg) =>
       seg.classification === 'EventHandler' &&
-      seg.confidence >= confidenceThreshold,
+      seg.confidence >= confidenceThreshold &&
+      (seg.span.end - seg.span.start) >= minHandlerSize,
   );
 
   const hasLazyTransforms = lazyCandidates && lazyCandidates.length > 0;
@@ -126,14 +128,14 @@ export function extractModule(
   // Bail if neither handler extraction nor lazy transforms produced changes
   if (extractedCount === 0 && !hasLazyTransforms) return null;
 
-  // Prepend `import { __phantom_lazy } from 'phantom-build/runtime'` if handlers were extracted
+  // Prepend `import { $p } from 'phantom-build/runtime'` if handlers were extracted
   if (extractedCount > 0) {
     const lazyImport = {
       type: 'ImportDeclaration' as const,
       specifiers: [{
         type: 'ImportSpecifier' as const,
-        imported: { type: 'Identifier' as const, name: '__phantom_lazy' },
-        local: { type: 'Identifier' as const, name: '__phantom_lazy' },
+        imported: { type: 'Identifier' as const, name: '$p' },
+        local: { type: 'Identifier' as const, name: '$p' },
       }],
       source: { type: 'Literal' as const, value: 'phantom-build/runtime' },
     };

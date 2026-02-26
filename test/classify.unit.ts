@@ -79,7 +79,8 @@ describe('classification engine', () => {
     });
 
     it('has EventHandler segments and extractions', () => {
-      const result = getResult();
+      // Pass minHandlerSize: 0 so small test fixture handlers still get extracted
+      const result = analyzeModule(fixture('event-handler.tsx'), 'event-handler.tsx', { minHandlerSize: 0 });
       const eventHandlers = segsByClass(result.segments, 'EventHandler');
       expect(eventHandlers.length).toBeGreaterThanOrEqual(3);
       expect(result.hasExtractions).toBe(true);

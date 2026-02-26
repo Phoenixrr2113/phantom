@@ -30,7 +30,7 @@ const pending = new Map<string, Promise<Function>>();
  * @param segmentId - The content-hashed segment ID (e.g., "seg_abc123")
  * @param args - The original function arguments + captured variables from outer scope
  */
-export function __phantom_lazy(
+export function $p(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   factory: () => Promise<any>,
   segmentId: string,

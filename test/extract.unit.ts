@@ -8,9 +8,12 @@ function fixture(name: string): string {
   return readFileSync(join(__dirname, 'fixtures', name), 'utf-8');
 }
 
+/** Options that disable minHandlerSize so small test fixtures are still extracted */
+const EXTRACT_ALL = { minHandlerSize: 0 };
+
 describe('extraction engine', () => {
   describe('event-handler.tsx (primary extraction target)', () => {
-    const getResult = () => analyzeModule(fixture('event-handler.tsx'), 'event-handler.tsx');
+    const getResult = () => analyzeModule(fixture('event-handler.tsx'), 'event-handler.tsx', EXTRACT_ALL);
 
     it('extracts event handlers to a grouped chunk module', () => {
       const result = getResult();
@@ -25,9 +28,9 @@ describe('extraction engine', () => {
       expect(result.extractedSegmentIds!.length).toBeGreaterThanOrEqual(3);
     });
 
-    it('client code includes __phantom_lazy import', () => {
+    it('client code includes $p import', () => {
       const result = getResult();
-      expect(result.clientCode).toContain("import { __phantom_lazy } from 'phantom-build/runtime'");
+      expect(result.clientCode).toContain("import { $p } from 'phantom-build/runtime'");
     });
 
     it('client code replaces handlers with lazy stubs pointing to grouped module', () => {
@@ -35,7 +38,7 @@ describe('extraction engine', () => {
       const groupId = result.chunkModules![0].id;
       // All stubs point to the same grouped module
       expect(result.clientCode).toContain(`import('phantom:${groupId}.js')`);
-      // Each segment ID still appears as the second arg to __phantom_lazy
+      // Each segment ID still appears as the second arg to $p
       for (const segId of result.extractedSegmentIds!) {
         expect(result.clientCode).toContain(`'${segId}'`);
       }
@@ -78,7 +81,7 @@ describe('extraction engine', () => {
   });
 
   describe('mixed.tsx', () => {
-    const getResult = () => analyzeModule(fixture('mixed.tsx'), 'mixed.tsx');
+    const getResult = () => analyzeModule(fixture('mixed.tsx'), 'mixed.tsx', EXTRACT_ALL);
 
     it('extracts handleSubmit into grouped chunk module', () => {
       const result = getResult();
@@ -116,9 +119,11 @@ describe('extraction engine', () => {
     it('respects confidence threshold', () => {
       const lowThreshold = analyzeModule(fixture('mixed.tsx'), 'mixed.tsx', {
         confidenceThreshold: 0.5,
+        ...EXTRACT_ALL,
       });
       const highThreshold = analyzeModule(fixture('mixed.tsx'), 'mixed.tsx', {
         confidenceThreshold: 0.95,
+        ...EXTRACT_ALL,
       });
 
       // Low threshold extracts more segments; high threshold may extract none
@@ -129,33 +134,54 @@ describe('extraction engine', () => {
   });
 
   describe('synchronous prelude', () => {
-    it('mixed.tsx handleSubmit stub has preventDefault before __phantom_lazy', () => {
-      const result = analyzeModule(fixture('mixed.tsx'), 'mixed.tsx');
+    it('mixed.tsx handleSubmit stub has preventDefault before $p', () => {
+      const result = analyzeModule(fixture('mixed.tsx'), 'mixed.tsx', EXTRACT_ALL);
       expect(result.clientCode).toBeDefined();
       // The stub must call e.preventDefault() synchronously
       expect(result.clientCode).toContain('preventDefault');
-      // And it must appear BEFORE __phantom_lazy in the client code
+      // And it must appear BEFORE $p in the client code
       const clientCode = result.clientCode!;
       const preventIdx = clientCode.indexOf('preventDefault');
-      const lazyIdx = clientCode.indexOf('__phantom_lazy');
-      // The import statement has __phantom_lazy first, so find the lazy call AFTER preventDefault
-      const lazyAfterPrevent = clientCode.indexOf('__phantom_lazy', preventIdx);
+      const lazyIdx = clientCode.indexOf('$p');
+      // The import statement has $p first, so find the lazy call AFTER preventDefault
+      const lazyAfterPrevent = clientCode.indexOf('$p', preventIdx);
       expect(lazyAfterPrevent).toBeGreaterThan(preventIdx);
     });
 
-    it('mixed.tsx handleSubmit stub has persist?.() call', () => {
-      const result = analyzeModule(fixture('mixed.tsx'), 'mixed.tsx');
-      expect(result.clientCode).toContain('persist');
-    });
-
     it('event-handler.tsx handleClick does NOT get preventDefault in stub', () => {
-      const result = analyzeModule(fixture('event-handler.tsx'), 'event-handler.tsx');
+      const result = analyzeModule(fixture('event-handler.tsx'), 'event-handler.tsx', EXTRACT_ALL);
       // handleClick does not call preventDefault, so the stub should NOT have it
       // The chunk module WILL have window.location.href but NOT preventDefault
       const clientCode = result.clientCode!;
       // Count occurrences of preventDefault — should only appear in import/chunk, not in stubs
       // Actually, event-handler.tsx has no preventDefault at all
       expect(clientCode).not.toContain('preventDefault');
+    });
+  });
+
+  describe('minHandlerSize threshold', () => {
+    it('skips extraction for handlers below minHandlerSize', () => {
+      // event-handler.tsx handlers are all < 200 bytes
+      const result = analyzeModule(fixture('event-handler.tsx'), 'event-handler.tsx', {
+        minHandlerSize: 200,
+      });
+      expect(result.hasExtractions).toBe(false);
+      expect(result.clientCode).toBeUndefined();
+    });
+
+    it('extracts handlers above minHandlerSize', () => {
+      // With threshold=0, all handlers are extracted
+      const result = analyzeModule(fixture('event-handler.tsx'), 'event-handler.tsx', {
+        minHandlerSize: 0,
+      });
+      expect(result.hasExtractions).toBe(true);
+      expect(result.extractedSegmentIds!.length).toBeGreaterThanOrEqual(3);
+    });
+
+    it('default threshold (200) skips tiny test fixture handlers', () => {
+      const result = analyzeModule(fixture('event-handler.tsx'), 'event-handler.tsx');
+      // Small test fixture handlers should be skipped with default threshold
+      expect(result.hasExtractions).toBe(false);
     });
   });
 
@@ -169,7 +195,7 @@ function App() {
   return <button onClick={handler}>Go</button>;
 }
       `;
-      const result = analyzeModule(code, '/project/src/components/App.tsx');
+      const result = analyzeModule(code, '/project/src/components/App.tsx', EXTRACT_ALL);
       expect(result.hasExtractions).toBe(true);
       const allChunkCode = result.chunkModules!.map(m => m.code).join('\n');
       // Relative path should be rewritten to absolute
@@ -187,7 +213,7 @@ function App() {
   return <button onClick={handler}>Go</button>;
 }
       `;
-      const result = analyzeModule(code, '/project/src/components/App.tsx');
+      const result = analyzeModule(code, '/project/src/components/App.tsx', EXTRACT_ALL);
       // React import in the chunk (if used) stays as 'react'
       // The client code should keep 'react' as-is
       expect(result.clientCode).toContain("from 'react'");
@@ -203,9 +229,9 @@ function App() {
   return <button onClick={handler}>Go</button>;
 }
       `;
-      const result = analyzeModule(code, 'func-expr.tsx');
+      const result = analyzeModule(code, 'func-expr.tsx', EXTRACT_ALL);
       expect(result.hasExtractions).toBe(true);
-      expect(result.clientCode).toContain('__phantom_lazy');
+      expect(result.clientCode).toContain('$p');
 
       // Client code must be parseable TSX
       const parsed = parseSync('client.tsx', result.clientCode!, {
@@ -220,6 +246,7 @@ function App() {
     it('hasExtractions is false when confidence threshold filters out all candidates', () => {
       const result = analyzeModule(fixture('mixed.tsx'), 'mixed.tsx', {
         confidenceThreshold: 0.99,
+        ...EXTRACT_ALL,
       });
       // handleSubmit has confidence 0.9, below 0.99 threshold
       expect(result.hasExtractions).toBe(false);
@@ -239,7 +266,7 @@ function App() {
           return null;
         }
       `;
-      const result = analyzeModule(code, 'client-only.tsx');
+      const result = analyzeModule(code, 'client-only.tsx', EXTRACT_ALL);
       expect(result.clientCode).toBeUndefined();
       expect(result.chunkModules).toBeUndefined();
     });
@@ -250,7 +277,7 @@ function formatPrice(price) {
   return '$' + price.toFixed(2);
 }
       `;
-      const result = analyzeModule(code, 'helper.ts');
+      const result = analyzeModule(code, 'helper.ts', EXTRACT_ALL);
       // Pure helpers are PureComputation, not EventHandler — no extraction
       expect(result.hasExtractions).toBe(false);
       expect(result.clientCode).toBeUndefined();
@@ -264,10 +291,10 @@ function App() {
   return <button onClick={() => { window.alert('clicked'); }}>Click</button>;
 }
       `;
-      const result = analyzeModule(code, 'inline-handler.tsx');
+      const result = analyzeModule(code, 'inline-handler.tsx', EXTRACT_ALL);
       expect(result.hasExtractions).toBe(true);
       expect(result.chunkModules!.length).toBeGreaterThanOrEqual(1);
-      expect(result.clientCode).toContain('__phantom_lazy');
+      expect(result.clientCode).toContain('$p');
     });
 
     it('no-extraction module returns undefined clientCode', () => {
@@ -275,13 +302,13 @@ function App() {
         function touchesDOM() { window.scrollTo(0, 0); }
         export default touchesDOM;
       `;
-      const result = analyzeModule(code, 'no-extract.ts');
+      const result = analyzeModule(code, 'no-extract.ts', EXTRACT_ALL);
       expect(result.clientCode).toBeUndefined();
       expect(result.chunkModules).toBeUndefined();
     });
 
     it('segment IDs match between client lazy calls and grouped chunk exports', () => {
-      const result = analyzeModule(fixture('event-handler.tsx'), 'event-handler.tsx');
+      const result = analyzeModule(fixture('event-handler.tsx'), 'event-handler.tsx', EXTRACT_ALL);
       const groupedCode = result.chunkModules![0].code;
 
       for (const segId of result.extractedSegmentIds!) {
@@ -295,7 +322,7 @@ function App() {
 
   describe('round-trip correctness', () => {
     it('chunk modules are parseable JavaScript', () => {
-      const result = analyzeModule(fixture('event-handler.tsx'), 'event-handler.tsx');
+      const result = analyzeModule(fixture('event-handler.tsx'), 'event-handler.tsx', EXTRACT_ALL);
 
       for (const mod of result.chunkModules!) {
         const parsed = parseSync('chunk.js', mod.code, {
@@ -307,7 +334,7 @@ function App() {
     });
 
     it('client code is parseable TSX', () => {
-      const result = analyzeModule(fixture('event-handler.tsx'), 'event-handler.tsx');
+      const result = analyzeModule(fixture('event-handler.tsx'), 'event-handler.tsx', EXTRACT_ALL);
 
       const parsed = parseSync('client.tsx', result.clientCode!, {
         lang: 'tsx',
@@ -317,7 +344,7 @@ function App() {
     });
 
     it('mixed.tsx chunk modules are all parseable', () => {
-      const result = analyzeModule(fixture('mixed.tsx'), 'mixed.tsx');
+      const result = analyzeModule(fixture('mixed.tsx'), 'mixed.tsx', EXTRACT_ALL);
       if (!result.chunkModules) return;
 
       for (const mod of result.chunkModules) {
@@ -330,7 +357,7 @@ function App() {
     });
 
     it('mixed.tsx client code is parseable TSX', () => {
-      const result = analyzeModule(fixture('mixed.tsx'), 'mixed.tsx');
+      const result = analyzeModule(fixture('mixed.tsx'), 'mixed.tsx', EXTRACT_ALL);
       if (!result.clientCode) return;
 
       const parsed = parseSync('client.tsx', result.clientCode, {
@@ -343,7 +370,7 @@ function App() {
 
   describe('source maps', () => {
     it('client code has a valid source map', () => {
-      const result = analyzeModule(fixture('event-handler.tsx'), 'event-handler.tsx');
+      const result = analyzeModule(fixture('event-handler.tsx'), 'event-handler.tsx', EXTRACT_ALL);
       expect(result.clientMap).toBeDefined();
       expect(result.clientMap!.version).toBe(3);
       expect(result.clientMap!.mappings.length).toBeGreaterThan(0);
@@ -351,7 +378,7 @@ function App() {
     });
 
     it('grouped chunk module has valid source map', () => {
-      const result = analyzeModule(fixture('event-handler.tsx'), 'event-handler.tsx');
+      const result = analyzeModule(fixture('event-handler.tsx'), 'event-handler.tsx', EXTRACT_ALL);
       expect(result.chunkModules!.length).toBe(1);
 
       const mod = result.chunkModules![0];
@@ -363,7 +390,7 @@ function App() {
 
     it('source maps include original source content', () => {
       const code = fixture('mixed.tsx');
-      const result = analyzeModule(code, 'mixed.tsx');
+      const result = analyzeModule(code, 'mixed.tsx', EXTRACT_ALL);
       expect(result.clientMap).toBeDefined();
       expect(result.clientMap!.sourcesContent).toBeDefined();
       expect(result.clientMap!.sourcesContent.length).toBeGreaterThan(0);
@@ -386,8 +413,8 @@ function App() {
   return <button onClick={handler}>Go</button>;
 }
       `;
-      const resultA = analyzeModule(code, '/home/user/project/App.tsx');
-      const resultB = analyzeModule(code, '/ci/build/workspace/App.tsx');
+      const resultA = analyzeModule(code, '/home/user/project/App.tsx', EXTRACT_ALL);
+      const resultB = analyzeModule(code, '/ci/build/workspace/App.tsx', EXTRACT_ALL);
       expect(resultA.extractedSegmentIds!.length).toBe(1);
       expect(resultB.extractedSegmentIds!.length).toBe(1);
       // Same code → same segment ID, regardless of file path
@@ -402,14 +429,13 @@ function App() {
   return <button onClick={handler}>Go</button>;
 }
       `;
-      const result = analyzeModule(code, 'test.tsx');
+      const result = analyzeModule(code, 'test.tsx', EXTRACT_ALL);
       // Client code must be valid — if expression property were wrong, esrap could mangle it
       const parsed = parseSync('client.tsx', result.clientCode!, { lang: 'tsx', sourceType: 'module' });
       expect(parsed.errors.length).toBe(0);
       // Prelude must appear as a block body, not expression body
       expect(result.clientCode).toContain('e.preventDefault()');
-      expect(result.clientCode).toContain('persist');
-      expect(result.clientCode).toContain('__phantom_lazy');
+      expect(result.clientCode).toContain('$p');
     });
 
     it('arrow function without prelude has expression body (no braces)', () => {
@@ -420,12 +446,12 @@ function App() {
   return <button onClick={handler}>Go</button>;
 }
       `;
-      const result = analyzeModule(code, 'test.tsx');
+      const result = analyzeModule(code, 'test.tsx', EXTRACT_ALL);
       const parsed = parseSync('client.tsx', result.clientCode!, { lang: 'tsx', sourceType: 'module' });
       expect(parsed.errors.length).toBe(0);
-      // Should be expression body: () => __phantom_lazy(...)
-      // NOT block body: () => { __phantom_lazy(...); }
-      expect(result.clientCode).toMatch(/=>\s*__phantom_lazy/);
+      // Should be expression body: () => $p(...)
+      // NOT block body: () => { $p(...); }
+      expect(result.clientCode).toMatch(/=>\s*\$p/);
     });
 
     it('client code contains import factory for Rollup code-splitting', () => {
@@ -436,7 +462,7 @@ function App() {
   return <button onClick={handler}>Go</button>;
 }
       `;
-      const result = analyzeModule(code, 'test.tsx');
+      const result = analyzeModule(code, 'test.tsx', EXTRACT_ALL);
       const groupId = result.chunkModules![0].id;
       // Must have import factory: () => import('phantom:grp_xxx.js')
       expect(result.clientCode).toContain(`import('phantom:${groupId}.js')`);

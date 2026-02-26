@@ -4,7 +4,7 @@ import phantom from 'phantom-build/vite';
 
 export default defineConfig({
   plugins: [
-    phantom(),
+    phantom({ minHandlerSize: 0 }),
     react(),
   ],
   build: {

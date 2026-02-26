@@ -20,11 +20,11 @@ describe('performance benchmarks', () => {
         const times: number[] = [];
 
         // Warm up (JIT)
-        analyzeModule(code, name, {});
+        analyzeModule(code, name, { minHandlerSize: 0 });
 
         for (let i = 0; i < iterations; i++) {
           const start = performance.now();
-          analyzeModule(code, name, {});
+          analyzeModule(code, name, { minHandlerSize: 0 });
           times.push(performance.now() - start);
         }
 
@@ -43,7 +43,7 @@ describe('performance benchmarks', () => {
   describe('chunk sizes', () => {
     it('reports chunk sizes for event-handler.tsx extraction', () => {
       const code = fixture('event-handler.tsx');
-      const result = analyzeModule(code, 'event-handler.tsx', {});
+      const result = analyzeModule(code, 'event-handler.tsx', { minHandlerSize: 0 });
 
       expect(result.hasExtractions).toBe(true);
       expect(result.chunkModules).toBeDefined();
@@ -68,7 +68,7 @@ describe('performance benchmarks', () => {
 
     it('handler logic moves from client to chunks', () => {
       const code = fixture('event-handler.tsx');
-      const result = analyzeModule(code, 'event-handler.tsx', {});
+      const result = analyzeModule(code, 'event-handler.tsx', { minHandlerSize: 0 });
 
       expect(result.clientCode).toBeDefined();
       const originalBytes = Buffer.byteLength(code, 'utf-8');
@@ -84,7 +84,7 @@ describe('performance benchmarks', () => {
       expect(totalChunkBytes).toBeGreaterThan(0);
       // Client code should NOT contain the handler bodies
       expect(result.clientCode).not.toContain('window.alert');
-      expect(result.clientCode).toContain('__phantom_lazy');
+      expect(result.clientCode).toContain('$p');
     });
   });
 
@@ -92,8 +92,8 @@ describe('performance benchmarks', () => {
     it('segment IDs are deterministic across repeated runs', () => {
       const code = fixture('event-handler.tsx');
 
-      const result1 = analyzeModule(code, 'event-handler.tsx', {});
-      const result2 = analyzeModule(code, 'event-handler.tsx', {});
+      const result1 = analyzeModule(code, 'event-handler.tsx', { minHandlerSize: 0 });
+      const result2 = analyzeModule(code, 'event-handler.tsx', { minHandlerSize: 0 });
 
       expect(result1.chunkModules!.length).toBe(result2.chunkModules!.length);
 
@@ -106,8 +106,8 @@ describe('performance benchmarks', () => {
     it('client code is identical across repeated runs', () => {
       const code = fixture('mixed.tsx');
 
-      const result1 = analyzeModule(code, 'mixed.tsx', {});
-      const result2 = analyzeModule(code, 'mixed.tsx', {});
+      const result1 = analyzeModule(code, 'mixed.tsx', { minHandlerSize: 0 });
+      const result2 = analyzeModule(code, 'mixed.tsx', { minHandlerSize: 0 });
 
       expect(result1.clientCode).toBe(result2.clientCode);
     });
@@ -115,8 +115,8 @@ describe('performance benchmarks', () => {
     it('segment IDs are content-based (same code → same IDs regardless of path)', () => {
       const code = fixture('event-handler.tsx');
 
-      const result1 = analyzeModule(code, '/src/App.tsx', {});
-      const result2 = analyzeModule(code, '/src/Other.tsx', {});
+      const result1 = analyzeModule(code, '/src/App.tsx', { minHandlerSize: 0 });
+      const result2 = analyzeModule(code, '/src/Other.tsx', { minHandlerSize: 0 });
 
       // Group IDs are path-based, so they will differ
       expect(result1.chunkModules!.length).toBe(result2.chunkModules!.length);
