@@ -1,5 +1,6 @@
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
-import { basename, dirname } from 'node:path';
+import { basename, dirname, resolve as pathResolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { createUnplugin } from 'unplugin';
 import type {
@@ -108,6 +109,12 @@ export const phantom = createUnplugin((options: PhantomPluginOptions = {}) => {
   const reExportMap = new Map<string, Map<string, { source: string; importedName: string }>>();
   /** SSR boundary analysis results (accumulated when ssrBoundaries is enabled) */
   const ssrBoundaryResults = new Map<string, SSRModuleResult>();
+  /** Grouped module virtual IDs (for idle modulepreload injection) */
+  const groupedModuleIds = new Set<string>();
+  /** Map from grouped virtual ID → emitted filename (populated in generateBundle) */
+  const emittedGroupChunks = new Map<string, string>();
+  /** Vite resolved base path */
+  let resolvedBase = '/';
   let moduleCount = 0;
   let modulesWithExtractions = 0;
 
@@ -274,6 +281,7 @@ export const phantom = createUnplugin((options: PhantomPluginOptions = {}) => {
           clientCode: extracted.clientCode,
           clientMap: extracted.clientMap,
           chunkModules: extracted.chunkModules,
+          extractedSegmentIds: extracted.extractedSegmentIds,
           lazyCandidates: refinedCandidates.length > 0 ? refinedCandidates : undefined,
           lazyKeptStatic: [
             ...mod.lazyKeptStatic,
@@ -515,6 +523,7 @@ export const phantom = createUnplugin((options: PhantomPluginOptions = {}) => {
         clientCode: heuristicExtracted.clientCode,
         clientMap: heuristicExtracted.clientMap,
         chunkModules: heuristicExtracted.chunkModules,
+        extractedSegmentIds: heuristicExtracted.extractedSegmentIds,
         lazyCandidates,
         lazyKeptStatic,
       };
@@ -548,19 +557,47 @@ export const phantom = createUnplugin((options: PhantomPluginOptions = {}) => {
 
       const newVirtualIds: string[] = [];
       for (const chunkMod of finalResult.chunkModules ?? []) {
-        const virtualId = `${VIRTUAL_PREFIX}${chunkMod.id}.chunk.js`;
+        // Grouped modules use `grp_xxx.js`, individual use `seg_xxx.chunk.js`
+        const isGrouped = chunkMod.id.startsWith('grp_');
+        const virtualId = isGrouped
+          ? `${VIRTUAL_PREFIX}${chunkMod.id}.js`
+          : `${VIRTUAL_PREFIX}${chunkMod.id}.chunk.js`;
         chunkModuleMap.set(virtualId, { code: chunkMod.code, map: chunkMod.map });
         chunkToSource.set(virtualId, id);
         newVirtualIds.push(virtualId);
 
-        const segment = finalResult.segments.find((s) => s.id === chunkMod.id);
-        manifestEntries.push({
-          segmentId: chunkMod.id,
-          sourceFile: id,
-          virtualId,
-          name: segment?.name ?? chunkMod.id,
-          kind: 'handler',
-        });
+        if (isGrouped) {
+          // Track grouped module IDs for idle modulepreload
+          groupedModuleIds.add(virtualId);
+        }
+      }
+
+      // Create manifest entries per individual segment ID
+      if (finalResult.extractedSegmentIds && finalResult.extractedSegmentIds.length > 0) {
+        const groupVirtualId = newVirtualIds[0]; // The grouped module
+        for (const segId of finalResult.extractedSegmentIds) {
+          const segment = finalResult.segments.find((s) => s.id === segId);
+          manifestEntries.push({
+            segmentId: segId,
+            sourceFile: id,
+            virtualId: groupVirtualId,
+            name: segment?.name ?? segId,
+            kind: 'handler',
+          });
+        }
+      } else {
+        // Fallback for non-grouped (shouldn't happen but safe)
+        for (const chunkMod of finalResult.chunkModules ?? []) {
+          const segment = finalResult.segments.find((s) => s.id === chunkMod.id);
+          const virtualId = `${VIRTUAL_PREFIX}${chunkMod.id}.chunk.js`;
+          manifestEntries.push({
+            segmentId: chunkMod.id,
+            sourceFile: id,
+            virtualId,
+            name: segment?.name ?? chunkMod.id,
+            kind: 'handler',
+          });
+        }
       }
 
       if (finalResult.lazyCandidates) {
@@ -594,6 +631,12 @@ export const phantom = createUnplugin((options: PhantomPluginOptions = {}) => {
     },
 
     async resolveId(id: string, importer?: string) {
+      // Resolve phantom-build/runtime to the actual runtime file
+      // (needed when phantom-build is not installed as a dependency in the target project)
+      if (id === 'phantom-build/runtime') {
+        const thisDir = dirname(fileURLToPath(import.meta.url));
+        return pathResolve(thisDir, 'runtime', 'index.js');
+      }
       if (id.startsWith(VIRTUAL_PREFIX)) {
         return id;
       }
@@ -644,6 +687,45 @@ export const phantom = createUnplugin((options: PhantomPluginOptions = {}) => {
           });
       });
     },
+
+    // Vite-specific hooks for idle modulepreload injection
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    vite: {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      configResolved(config: any) {
+        resolvedBase = config.base || '/';
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      generateBundle(_: any, bundle: Record<string, any>) {
+        if (options.ssr) return;
+        // Map grouped virtual IDs to their emitted filenames
+        for (const [fileName, chunk] of Object.entries(bundle)) {
+          if (chunk.type !== 'chunk') continue;
+          // Vite/Rollup exposes moduleIds on chunk assets
+          const moduleIds: string[] = chunk.moduleIds ?? Object.keys(chunk.modules ?? {});
+          for (const moduleId of moduleIds) {
+            if (groupedModuleIds.has(moduleId)) {
+              emittedGroupChunks.set(moduleId, fileName);
+            }
+          }
+        }
+      },
+      transformIndexHtml(html: string) {
+        if (options.ssr || emittedGroupChunks.size === 0) return html;
+        // Build idle preload script
+        const base = resolvedBase.endsWith('/') ? resolvedBase : resolvedBase + '/';
+        const chunkPaths = [...emittedGroupChunks.values()].map(
+          (fileName) => `"${base}${fileName}"`,
+        );
+        const script = [
+          '<script>',
+          '// Phantom: preload handler chunks during idle time',
+          `"requestIdleCallback"in window?requestIdleCallback(function(){[${chunkPaths.join(',')}].forEach(function(h){var l=document.createElement("link");l.rel="modulepreload";l.href=h;document.head.appendChild(l)})}):void 0`,
+          '</script>',
+        ].join('\n');
+        return html.replace('</body>', `${script}\n</body>`);
+      },
+    } as Record<string, unknown>,
 
     buildEnd() {
       // SSR mode: skip manifest writing and print a brief notice

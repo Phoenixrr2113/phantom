@@ -3,18 +3,24 @@ import { print } from 'esrap';
 import tsx from 'esrap/languages/tsx';
 import type { AnalyzedModule, ClassifiedSegment, LazyCandidate, SourceMapLike } from '../types.js';
 import { resolveImports } from './import-resolver.js';
-import { generateChunkModule } from './chunk-module.js';
 import { replaceWithStub, type ExtractableNode } from './client-stub.js';
 import { applyLazyTransforms } from './lazy-transform.js';
+import { generateGroupedChunkModule, generateGroupId, type GroupedHandlerInput } from './grouped-chunk-module.js';
 
 export interface ExtractionResult {
   clientCode: string;
   clientMap: SourceMapLike;
   chunkModules: Array<{ id: string; code: string; map: SourceMapLike }>;
+  /** Individual segment IDs within the grouped module */
+  extractedSegmentIds: string[];
 }
 
 /**
  * Extract EventHandler segments from a module into lazy-loaded chunks.
+ *
+ * All handlers from the same source file are grouped into a single chunk module
+ * with multiple named exports. This reduces the number of HTTP requests and
+ * improves gzip compression compared to one-chunk-per-handler.
  *
  * Returns null if no segments qualify for extraction,
  * otherwise returns rewritten client code + chunk modules.
@@ -43,8 +49,20 @@ export function extractModule(
   // Deep-copy the full AST for client code mutation
   const clientAST = structuredClone(analyzed.ast) as Program;
 
-  const chunkModules: Array<{ id: string; code: string; map: SourceMapLike }> = [];
-  let extractedCount = 0;
+  // ── Phase 1: Collect handler data for grouping ──────────────────────
+  const groupedHandlers: GroupedHandlerInput[] = [];
+  const extractedSegmentIds: string[] = [];
+  const seenSegmentIds = new Set<string>();
+
+  // Collect data for each handler + replace stubs in client AST
+  const groupId = extractable.length > 0 ? generateGroupId(sourceFilePath) : undefined;
+
+  interface PendingStub {
+    clientNode: ExtractableNode;
+    segment: ClassifiedSegment;
+    capturedParams: string[];
+  }
+  const pendingStubs: PendingStub[] = [];
 
   for (const segment of extractable) {
     // Find the AST node in the ORIGINAL tree (for chunk module generation)
@@ -58,22 +76,47 @@ export function extractModule(
     // Separate captured vars from imports (rewrites relative paths to absolute)
     const resolution = resolveImports(segment, analyzed, sourceFilePath);
 
-    // Generate the chunk module from the original (unmutated) AST
-    const chunkResult = generateChunkModule(
+    // Only include each unique segment ID once in the grouped module
+    // (two handlers with identical content hash → same seg ID → would cause duplicate export)
+    if (!seenSegmentIds.has(segment.id)) {
+      groupedHandlers.push({
+        segment,
+        astNode: originalNode,
+        imports: resolution.imports,
+        capturedParams: resolution.capturedParams,
+      });
+      seenSegmentIds.add(segment.id);
+    }
+
+    // All stubs still need replacement (each points to the same function in the grouped module)
+    pendingStubs.push({
+      clientNode,
       segment,
-      originalNode,
-      resolution.imports,
-      resolution.capturedParams,
+      capturedParams: resolution.capturedParams,
+    });
+
+    extractedSegmentIds.push(segment.id);
+  }
+
+  // ── Phase 2: Generate grouped chunk module ──────────────────────────
+  const chunkModules: Array<{ id: string; code: string; map: SourceMapLike }> = [];
+
+  if (groupedHandlers.length > 0 && groupId) {
+    // Generate the single grouped module containing all handler exports
+    const groupedResult = generateGroupedChunkModule(
+      groupedHandlers,
       sourceFilePath,
       _sourceCode,
     );
-    chunkModules.push({ id: segment.id, code: chunkResult.code, map: chunkResult.map });
+    chunkModules.push({ id: groupId, code: groupedResult.code, map: groupedResult.map });
 
-    // Mutate the client AST node — replace function body with lazy stub
-    replaceWithStub(clientNode, segment, resolution.capturedParams);
-
-    extractedCount++;
+    // Now replace all handler bodies with lazy stubs pointing to the grouped module
+    for (const stub of pendingStubs) {
+      replaceWithStub(stub.clientNode, stub.segment, stub.capturedParams, groupId);
+    }
   }
+
+  const extractedCount = groupedHandlers.length;
 
   // Apply React.lazy + Suspense transforms (after handler extraction)
   if (hasLazyTransforms) {
@@ -104,7 +147,7 @@ export function extractModule(
     sourceMapContent: _sourceCode,
   });
 
-  return { clientCode: result.code, clientMap: result.map, chunkModules };
+  return { clientCode: result.code, clientMap: result.map, chunkModules, extractedSegmentIds };
 }
 
 // ── AST helpers ──────────────────────────────────────────────────────────

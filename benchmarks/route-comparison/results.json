@@ -53,8 +53,8 @@
       {
         "route": "_authenticated/chats",
         "baselineSize": 17124,
-        "phantomSize": 16324,
-        "saved": 800
+        "phantomSize": 16294,
+        "saved": 830
       },
       {
         "route": "(auth)/forgot-password",
@@ -155,8 +155,8 @@
       {
         "route": "_authenticated/apps",
         "baselineSize": 15622,
-        "phantomSize": 15870,
-        "saved": -248
+        "phantomSize": 15864,
+        "saved": -242
       },
       {
         "route": "(auth)/sign-in-2",
@@ -178,31 +178,9 @@
       }
     ],
     "totalBaseline": 491394,
-    "totalPhantom": 79322,
-    "totalSaved": 412072,
-    "phantomChunks": 57,
-    "phantomChunkTotal": 5422
-  },
-  {
-    "project": "bulletproof-react",
-    "matchedRoutes": [
-      {
-        "route": "src/testing/mocks/browser",
-        "baselineSize": 69690,
-        "phantomSize": 69691,
-        "saved": -1
-      },
-      {
-        "route": "app/profile",
-        "baselineSize": 2839,
-        "phantomSize": 3098,
-        "saved": -259
-      }
-    ],
-    "totalBaseline": 72529,
-    "totalPhantom": 72789,
-    "totalSaved": -260,
-    "phantomChunks": 7,
-    "phantomChunkTotal": 18443
+    "totalPhantom": 79286,
+    "totalSaved": 412108,
+    "phantomChunks": 33,
+    "phantomChunkTotal": 5800
   }
 ]

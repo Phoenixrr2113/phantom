@@ -167,14 +167,14 @@ describe('phantom unplugin', () => {
       );
       expect(transformResult).not.toBeNull();
 
-      // Extract the segment ID from the import factory in the lazy call
-      // Pattern: import('phantom:seg_xxx.chunk.js')
-      const lazyMatch = transformResult.code.match(/import\('phantom:([^']+)\.chunk\.js'\)/);
+      // Extract the grouped module ID from the import factory in the lazy call
+      // Pattern: import('phantom:grp_xxx.js')
+      const lazyMatch = transformResult.code.match(/import\('phantom:(grp_[a-f0-9]+)\.js'\)/);
       expect(lazyMatch).not.toBeNull();
-      const segId = lazyMatch![1];
+      const groupId = lazyMatch![1];
 
       // Load the virtual module
-      const virtualId = `${VIRTUAL_PREFIX}${segId}.chunk.js`;
+      const virtualId = `${VIRTUAL_PREFIX}${groupId}.js`;
       const loadResult = (plugin.load as Function).call(mockContext, virtualId);
       expect(loadResult).toBeDefined();
       expect(loadResult.code).toBeDefined();
@@ -200,7 +200,7 @@ describe('phantom unplugin', () => {
   });
 
   describe('end-to-end flow', () => {
-    it('transform → resolveId → load produces parseable chunk modules', async () => {
+    it('transform → resolveId → load produces parseable grouped chunk modules', async () => {
       const plugin = createPlugin();
       const code = fixture('event-handler.tsx');
 
@@ -212,15 +212,17 @@ describe('phantom unplugin', () => {
       );
       expect(transformResult).not.toBeNull();
 
-      // Step 2: Extract segment IDs from import factories in client code
-      const lazyCalls = [...transformResult.code.matchAll(/import\('phantom:([^']+)\.chunk\.js'\)/g)];
+      // Step 2: Extract grouped module IDs from import factories in client code
+      const lazyCalls = [...transformResult.code.matchAll(/import\('phantom:(grp_[a-f0-9]+)\.js'\)/g)];
       expect(lazyCalls.length).toBeGreaterThan(0);
 
-      for (const match of lazyCalls) {
-        const segId = match[1];
+      // Deduplicate — all stubs in same file point to the same grouped module
+      const groupIds = [...new Set(lazyCalls.map((m) => m[1]))];
+      expect(groupIds.length).toBe(1);
 
+      for (const groupId of groupIds) {
         // Step 3: Resolve the virtual module
-        const publicId = `phantom:${segId}.chunk.js`;
+        const publicId = `phantom:${groupId}.js`;
         const resolvedId = await (plugin.resolveId as Function).call(
           mockContext,
           publicId,
@@ -235,12 +237,13 @@ describe('phantom unplugin', () => {
         expect(loadResult.code).toBeDefined();
         expect(loadResult.map).toBeDefined();
 
-        // Step 5: Verify the chunk code is parseable JavaScript
+        // Step 5: Verify the chunk code is parseable JavaScript with multiple exports
         const parsed = parseSync('chunk.js', loadResult.code, {
           lang: 'js',
           sourceType: 'module',
         });
         expect(parsed.errors.length).toBe(0);
+        expect(loadResult.code).toContain('export function');
       }
     });
 
@@ -256,23 +259,23 @@ describe('phantom unplugin', () => {
       expect(parsed.errors.length).toBe(0);
     });
 
-    it('mixed.tsx produces chunk modules via load', async () => {
+    it('mixed.tsx produces grouped chunk module via load', async () => {
       const plugin = createPlugin();
       const code = fixture('mixed.tsx');
       const result = await (plugin.transform as Function).call(mockContext, code, 'mixed.tsx');
       expect(result).not.toBeNull();
 
-      const lazyCalls = [...result.code.matchAll(/import\('phantom:([^']+)\.chunk\.js'\)/g)];
+      const lazyCalls = [...result.code.matchAll(/import\('phantom:(grp_[a-f0-9]+)\.js'\)/g)];
       expect(lazyCalls.length).toBeGreaterThanOrEqual(1);
 
+      const groupIds = [...new Set(lazyCalls.map((m) => m[1]))];
       let loadedCount = 0;
-      for (const match of lazyCalls) {
-        const segId = match[1];
-        const virtualId = `${VIRTUAL_PREFIX}${segId}.chunk.js`;
+      for (const groupId of groupIds) {
+        const virtualId = `${VIRTUAL_PREFIX}${groupId}.js`;
         const loadResult = (plugin.load as Function).call(mockContext, virtualId);
         if (loadResult) {
           loadedCount++;
-          // Each should be parseable
+          // Should be parseable
           const parsed = parseSync('chunk.js', loadResult.code, {
             lang: 'js',
             sourceType: 'module',
@@ -315,13 +318,13 @@ describe('phantom unplugin', () => {
       const result1 = await (plugin.transform as Function).call(mockContext, code, 'event-handler.tsx');
       expect(result1).not.toBeNull();
 
-      // Extract a segment ID
-      const match1 = result1.code.match(/import\('phantom:([^']+)\.chunk\.js'\)/);
+      // Extract the grouped module ID
+      const match1 = result1.code.match(/import\('phantom:(grp_[a-f0-9]+)\.js'\)/);
       expect(match1).not.toBeNull();
-      const segId1 = match1![1];
+      const groupId1 = match1![1];
 
       // Verify chunk is loadable (returns { code, map } object)
-      const virtualId1 = `${VIRTUAL_PREFIX}${segId1}.chunk.js`;
+      const virtualId1 = `${VIRTUAL_PREFIX}${groupId1}.js`;
       const loaded = (plugin.load as Function).call(mockContext, virtualId1);
       expect(loaded).toBeDefined();
       expect(loaded.code).toContain('export function');
@@ -341,17 +344,17 @@ describe('phantom unplugin', () => {
       const result1 = await (plugin.transform as Function).call(mockContext, code1, '/src/App.tsx');
       expect(result1).not.toBeNull();
 
-      // Collect all chunk IDs from first transform
-      const matches1 = [...result1.code.matchAll(/import\('phantom:([^']+)\.chunk\.js'\)/g)];
-      const oldVirtualIds = matches1.map((m) => `${VIRTUAL_PREFIX}${m[1]}.chunk.js`);
-      expect(oldVirtualIds.length).toBeGreaterThan(0);
+      // Collect grouped module ID from first transform
+      const matches1 = [...result1.code.matchAll(/import\('phantom:(grp_[a-f0-9]+)\.js'\)/g)];
+      const groupIds1 = [...new Set(matches1.map((m) => m[1]))];
+      expect(groupIds1.length).toBe(1);
 
-      // Verify old chunks are loadable
-      for (const vid of oldVirtualIds) {
-        expect((plugin.load as Function).call(mockContext, vid)).toBeDefined();
-      }
+      const virtualId = `${VIRTUAL_PREFIX}${groupIds1[0]}.js`;
+      const loaded1 = (plugin.load as Function).call(mockContext, virtualId);
+      expect(loaded1).toBeDefined();
+      expect(loaded1.code).toContain('export function');
 
-      // Second transform: same file path, different code (produces different chunks)
+      // Second transform: same file path, different code (produces different handler content)
       const code2 = `
 import React from 'react';
 function App() {
@@ -362,18 +365,15 @@ function App() {
       const result2 = await (plugin.transform as Function).call(mockContext, code2, '/src/App.tsx');
       expect(result2).not.toBeNull();
 
-      // Old chunks should be gone
-      for (const vid of oldVirtualIds) {
-        expect((plugin.load as Function).call(mockContext, vid)).toBeUndefined();
-      }
+      // Group ID stays the same (same file path → same hash), but content is replaced
+      const matches2 = [...result2.code.matchAll(/import\('phantom:(grp_[a-f0-9]+)\.js'\)/g)];
+      const groupIds2 = [...new Set(matches2.map((m) => m[1]))];
+      expect(groupIds2[0]).toBe(groupIds1[0]); // Same group ID
 
-      // New chunks should be loadable
-      const matches2 = [...result2.code.matchAll(/import\('phantom:([^']+)\.chunk\.js'\)/g)];
-      const newVirtualIds = matches2.map((m) => `${VIRTUAL_PREFIX}${m[1]}.chunk.js`);
-      expect(newVirtualIds.length).toBeGreaterThan(0);
-      for (const vid of newVirtualIds) {
-        expect((plugin.load as Function).call(mockContext, vid)).toBeDefined();
-      }
+      // The loaded module should now contain the NEW handler code, not old
+      const loaded2 = (plugin.load as Function).call(mockContext, virtualId);
+      expect(loaded2).toBeDefined();
+      expect(loaded2.code).toContain('new version');
     });
 
     it('transform gracefully handles syntax errors (returns null, does not crash)', async () => {

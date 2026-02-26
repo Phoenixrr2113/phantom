@@ -376,6 +376,7 @@ export function analyzeModule(
       clientCode: extracted.clientCode,
       clientMap: extracted.clientMap,
       chunkModules: extracted.chunkModules,
+      extractedSegmentIds: extracted.extractedSegmentIds,
       lazyCandidates,
       lazyKeptStatic,
     };

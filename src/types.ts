@@ -99,8 +99,10 @@ export interface AnalysisResult {
   clientCode?: string;
   /** Source map for transformed client code */
   clientMap?: SourceMapLike;
-  /** Generated lazy-loaded chunk modules */
+  /** Generated lazy-loaded chunk modules (grouped: one module per source file) */
   chunkModules?: Array<{ id: string; code: string; map: SourceMapLike }>;
+  /** Individual segment IDs within the grouped chunk module */
+  extractedSegmentIds?: string[];
   /** Lazy component candidates (components that should be React.lazy wrapped) */
   lazyCandidates?: LazyCandidate[];
   /** Components kept static with reasons */

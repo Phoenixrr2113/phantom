@@ -24,7 +24,7 @@ beforeAll(() => {
 
 function getChunkFiles(): string[] {
   return readdirSync(DIST_DIR).filter(
-    (f) => f.includes('phantom_seg_') && f.endsWith('.js') && !f.endsWith('.js.map'),
+    (f) => f.includes('phantom_') && f.endsWith('.js') && !f.endsWith('.js.map'),
   );
 }
 
@@ -47,9 +47,9 @@ describe('Webpack integration', () => {
       expect(buildOutput).toContain('compiled successfully');
     });
 
-    it('produces at least 4 phantom chunk files', () => {
+    it('produces at least 1 phantom chunk file (grouped module)', () => {
       const chunks = getChunkFiles();
-      expect(chunks.length).toBeGreaterThanOrEqual(4);
+      expect(chunks.length).toBeGreaterThanOrEqual(1);
     });
 
     it('each chunk has a source map', () => {
