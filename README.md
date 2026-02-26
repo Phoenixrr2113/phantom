@@ -169,12 +169,11 @@ export default function CheckoutPage({ order, user }) {
 **What stays static (not lazified):**
 - Components above the fold (positions 0-1 in the JSX tree)
 - Context providers (must hydrate before consumers)
-- Components with no meaningful JS cost (pure display, no handlers/effects/state)
+- Tiny components (source files under 512 bytes — stub overhead would exceed savings)
 
 **What gets lazified:**
-- Components below the fold (position 2+)
+- Components below the fold (position 2+) with meaningful source size
 - Conditionally rendered components (`{flag && <Component />}`)
-- Components with handlers, effects, or state (worth deferring)
 
 ## Configuration
 
@@ -184,8 +183,17 @@ phantom({
   // Lower = more aggressive extraction. Default: 0.8
   confidenceThreshold: 0.8,
 
+  // Minimum handler body size in bytes to extract. Default: 200
+  // Handlers smaller than this are left inline (stub would be bigger).
+  minHandlerSize: 200,
+
   // Enable/disable lazy component wrapping. Default: true
   enableLazy: true,
+
+  // Preload strategy for handler chunks. Default: 'none'
+  // 'idle' injects requestIdleCallback modulepreload for all chunks.
+  // 'none' loads chunks on-demand only (best for Lighthouse scores).
+  preloadStrategy: 'none',
 
   // Output path for the build manifest. Default: "phantom.manifest.json"
   manifestPath: 'phantom.manifest.json',
@@ -249,7 +257,7 @@ webpack.config.server.js  →  phantom({ ssr: true })   // no-op
 
 The client build produces lazy-loaded handler chunks and `React.lazy` wrappers. The server build produces a synchronous bundle for `renderToString()` with all components inline.
 
-**Why not strip just `React.lazy`?** Selectively removing lazy transforms while keeping handler extraction would still inject `__phantom_lazy` runtime imports and dynamic `import()` calls into the server bundle. A clean no-op is simpler, produces the smallest server bundle, and avoids any SSR-incompatible code paths.
+**Why not strip just `React.lazy`?** Selectively removing lazy transforms while keeping handler extraction would still inject `$p` runtime imports and dynamic `import()` calls into the server bundle. A clean no-op is simpler, produces the smallest server bundle, and avoids any SSR-incompatible code paths.
 
 ### LLM-Assisted Optimization
 
@@ -312,8 +320,9 @@ Phantom Analysis: src/components/CheckoutPage.tsx
 phantom analyze <file> [options]
 
 Options:
-  --threshold <number>   Confidence threshold for extraction (default: 0.8)
-  --help, -h             Show this help message
+  --threshold <number>          Confidence threshold for extraction (default: 0.8)
+  --min-handler-size <number>   Min handler bytes to extract (default: 200)
+  --help, -h                    Show this help message
 ```
 
 ## Build Manifest
@@ -377,7 +386,7 @@ Phantom processes each module through a 5-phase pipeline:
 
 ## How the Runtime Works
 
-The `phantom-build/runtime` module provides `__phantom_lazy`, which:
+The `phantom-build/runtime` module provides `$p` (the lazy handler loader), which:
 
 1. On first invocation, dynamically imports the handler chunk
 2. Caches the loaded function for instant subsequent calls
@@ -385,13 +394,12 @@ The `phantom-build/runtime` module provides `__phantom_lazy`, which:
 4. Cleans up on failure so retries work
 
 ```ts
-import { __phantom_lazy } from 'phantom-build/runtime';
+import { $p } from 'phantom-build/runtime';
 
 // Generated stub (you never write this — Phantom does):
 const handleClick = (e) => {
   e.preventDefault();        // synchronous — runs immediately
-  e.persist?.();             // React <17 compat
-  __phantom_lazy(
+  $p(
     () => import('phantom:seg_abc123.chunk.js'),
     'seg_abc123',
     e,                       // forwarded args
@@ -440,12 +448,13 @@ Phantom reduces the JavaScript that loads when navigating to each page. Shared d
 
 | Metric | Baseline | Phantom | Change |
 |---|---|---|---|
-| Total Blocking Time | 32 ms | 6 ms | **−83%** |
-| First Contentful Paint | 3.18 s | 3.18 s | — |
-| Performance Score | 80 | 79 | −1 |
-| Build Time | 3.7 s | 4.1 s | +8% |
+| Performance Score | 80 | 80 | **0** |
+| Total Blocking Time | 63 ms | 4 ms | **−94%** |
+| First Contentful Paint | 3.19 s | 3.18 s | — |
+| Largest Contentful Paint | 4.16 s | 4.11 s | −1% |
+| Total Byte Weight | 479 KB | 478 KB | — |
 
-Total Blocking Time measures how long the main thread is locked and unable to respond to user input. Phantom reduces it by 83% because route chunks contain far less JavaScript to parse and compile.
+Total Blocking Time measures how long the main thread is locked and unable to respond to user input. Phantom reduces it by 94% because route chunks contain far less JavaScript to parse and compile — with zero regression in performance score or byte weight.
 
 ### Reproduce
 
