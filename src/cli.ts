@@ -79,7 +79,7 @@ function main(): void {
   console.log(`  ${'─'.repeat(30)} ${'─'.repeat(20)} ${'─'.repeat(6)} ${'─'.repeat(10)}`);
 
   for (const seg of result.segments) {
-    const extracted = result.chunkModules?.some((m) => m.id === seg.id) ? '✓ yes' : '  no';
+    const extracted = result.extractedSegmentIds?.includes(seg.id) ? '✓ yes' : '  no';
     console.log(
       `  ${seg.name.padEnd(30)} ${seg.classification.padEnd(20)} ${seg.confidence.toFixed(2).padStart(5)}  ${extracted}`,
     );
@@ -95,11 +95,14 @@ function main(): void {
   console.log(`  Segments: ${result.segments.length}`);
   console.log(`  Threshold: ${threshold}`);
 
-  if (result.chunkModules && result.chunkModules.length > 0) {
-    console.log(`  Chunks extracted: ${result.chunkModules.length}`);
-    for (const mod of result.chunkModules) {
-      const sizeKb = (Buffer.byteLength(mod.code, 'utf-8') / 1024).toFixed(1);
-      console.log(`    ${mod.id} (${sizeKb} KB)`);
+  const extractedCount = result.extractedSegmentIds?.length ?? 0;
+  if (extractedCount > 0) {
+    console.log(`  Chunks extracted: ${extractedCount}`);
+    if (result.chunkModules) {
+      for (const mod of result.chunkModules) {
+        const sizeKb = (Buffer.byteLength(mod.code, 'utf-8') / 1024).toFixed(1);
+        console.log(`    ${mod.id} (${sizeKb} KB)`);
+      }
     }
   } else {
     console.log('  Chunks extracted: 0');

@@ -24,7 +24,7 @@ beforeAll(() => {
 
 function getChunkFiles(): string[] {
   return readdirSync(DIST_ASSETS).filter(
-    (f) => f.startsWith('_phantom_seg_') && f.endsWith('.js') && !f.endsWith('.js.map'),
+    (f) => f.includes('phantom_') && f.endsWith('.js') && !f.endsWith('.js.map'),
   );
 }
 
@@ -56,9 +56,9 @@ describe('Vite integration', () => {
       expect(buildOutput).toBeDefined();
     });
 
-    it('produces at least 4 phantom chunk files', () => {
+    it('produces at least 1 phantom chunk file (grouped module)', () => {
       const chunks = getChunkFiles();
-      expect(chunks.length).toBeGreaterThanOrEqual(4);
+      expect(chunks.length).toBeGreaterThanOrEqual(1);
     });
 
     it('each chunk has a source map', () => {

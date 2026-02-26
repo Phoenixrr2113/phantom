@@ -86,65 +86,22 @@ function stripTypeAnnotations(node: any): any {
   return node;
 }
 
-// ── Chunk module generation ─────────────────────────────────────────────
+// ── Handler function AST builder (shared between single and grouped) ────
 
 /**
- * Generate a lazy-loaded chunk module that exports the extracted function.
+ * Build an exported FunctionDeclaration AST node for a single handler.
  *
- * Output shape:
+ * This is the core logic shared by both `generateChunkModule()` (single handler
+ * per file) and `generateGroupedChunkModule()` (multiple handlers per file).
  *
- *   import { someUtil } from './utils';
- *
- *   export function seg_abc123(e) {
- *     e.preventDefault();
- *     const form = e.target;
- *     // ...handler logic
- *   }
+ * Returns an ExportNamedDeclaration wrapping a FunctionDeclaration with the
+ * segment ID as the function name. TypeScript annotations are stripped.
  */
-export function generateChunkModule(
+export function buildHandlerExportAST(
   segment: ClassifiedSegment,
   astNode: ExtractableNode,
-  imports: ImportInfo[],
   capturedParams: string[],
-  sourceFilePath: string,
-  sourceCode: string,
-): { code: string; map: SourceMapLike } {
-  const body: Program['body'] = [];
-
-  // 1. Import declarations
-  for (const imp of imports) {
-    const specifiers: (ImportSpecifier | ImportDefaultSpecifier | ImportNamespaceSpecifier)[] =
-      imp.specifiers.map((spec) => {
-        if (spec.kind === 'default') {
-          return {
-            type: 'ImportDefaultSpecifier' as const,
-            local: { type: 'Identifier' as const, name: spec.local },
-          };
-        }
-        if (spec.kind === 'namespace') {
-          return {
-            type: 'ImportNamespaceSpecifier' as const,
-            local: { type: 'Identifier' as const, name: spec.local },
-          };
-        }
-        return {
-          type: 'ImportSpecifier' as const,
-          imported: { type: 'Identifier' as const, name: spec.imported ?? spec.local },
-          local: { type: 'Identifier' as const, name: spec.local },
-        };
-      });
-
-    const decl = {
-      type: 'ImportDeclaration',
-      specifiers,
-      source: { type: 'Literal', value: imp.source },
-    } as ImportDeclaration;
-    body.push(decl);
-  }
-
-  // 2. Exported function with original params + captured params
-  // Original function params come first, then captured variables from outer scope.
-  // Strip TypeScript annotations so the generated chunk is valid JavaScript.
+): { type: 'ExportNamedDeclaration'; declaration: FunctionDeclaration; specifiers: never[]; source: null; attributes: never[] } {
   const originalParams = stripTypeAnnotations(structuredClone(astNode.params));
   const capturedIdentifiers: Identifier[] = capturedParams.map((name) => ({
     type: 'Identifier',
@@ -175,15 +132,79 @@ export function generateChunkModule(
     generator: (astNode as { generator?: boolean }).generator ?? false,
   };
 
-  const exportDecl = {
+  return {
     type: 'ExportNamedDeclaration' as const,
     declaration: funcDecl,
     specifiers: [] as never[],
     source: null,
-    attributes: [],
+    attributes: [] as never[],
   };
+}
 
-  body.push(exportDecl);
+/**
+ * Build ImportDeclaration AST nodes from an array of ImportInfo.
+ */
+export function buildImportDeclarations(imports: ImportInfo[]): ImportDeclaration[] {
+  return imports.map((imp) => {
+    const specifiers: (ImportSpecifier | ImportDefaultSpecifier | ImportNamespaceSpecifier)[] =
+      imp.specifiers.map((spec) => {
+        if (spec.kind === 'default') {
+          return {
+            type: 'ImportDefaultSpecifier' as const,
+            local: { type: 'Identifier' as const, name: spec.local },
+          };
+        }
+        if (spec.kind === 'namespace') {
+          return {
+            type: 'ImportNamespaceSpecifier' as const,
+            local: { type: 'Identifier' as const, name: spec.local },
+          };
+        }
+        return {
+          type: 'ImportSpecifier' as const,
+          imported: { type: 'Identifier' as const, name: spec.imported ?? spec.local },
+          local: { type: 'Identifier' as const, name: spec.local },
+        };
+      });
+
+    return {
+      type: 'ImportDeclaration',
+      specifiers,
+      source: { type: 'Literal', value: imp.source },
+    } as ImportDeclaration;
+  });
+}
+
+// ── Chunk module generation ─────────────────────────────────────────────
+
+/**
+ * Generate a lazy-loaded chunk module that exports the extracted function.
+ *
+ * Output shape:
+ *
+ *   import { someUtil } from './utils';
+ *
+ *   export function seg_abc123(e) {
+ *     e.preventDefault();
+ *     const form = e.target;
+ *     // ...handler logic
+ *   }
+ */
+export function generateChunkModule(
+  segment: ClassifiedSegment,
+  astNode: ExtractableNode,
+  imports: ImportInfo[],
+  capturedParams: string[],
+  sourceFilePath: string,
+  sourceCode: string,
+): { code: string; map: SourceMapLike } {
+  const body: Program['body'] = [];
+
+  // 1. Import declarations
+  body.push(...buildImportDeclarations(imports));
+
+  // 2. Exported function
+  body.push(buildHandlerExportAST(segment, astNode, capturedParams));
 
   // 3. Generate code with esrap
   const program: Program = {

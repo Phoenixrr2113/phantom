@@ -12,12 +12,17 @@ describe('extraction engine', () => {
   describe('event-handler.tsx (primary extraction target)', () => {
     const getResult = () => analyzeModule(fixture('event-handler.tsx'), 'event-handler.tsx');
 
-    it('extracts event handlers to chunk modules', () => {
+    it('extracts event handlers to a grouped chunk module', () => {
       const result = getResult();
       expect(result.hasExtractions).toBe(true);
       expect(result.clientCode).toBeDefined();
       expect(result.chunkModules).toBeDefined();
-      expect(result.chunkModules!.length).toBeGreaterThanOrEqual(3);
+      // Grouped: one module per source file containing all handlers
+      expect(result.chunkModules!.length).toBe(1);
+      expect(result.chunkModules![0].id).toMatch(/^grp_/);
+      // Individual segment IDs tracked separately
+      expect(result.extractedSegmentIds).toBeDefined();
+      expect(result.extractedSegmentIds!.length).toBeGreaterThanOrEqual(3);
     });
 
     it('client code includes __phantom_lazy import', () => {
@@ -25,25 +30,28 @@ describe('extraction engine', () => {
       expect(result.clientCode).toContain("import { __phantom_lazy } from 'phantom-build/runtime'");
     });
 
-    it('client code replaces handlers with lazy stubs', () => {
+    it('client code replaces handlers with lazy stubs pointing to grouped module', () => {
       const result = getResult();
-      for (const mod of result.chunkModules!) {
-        // Factory arg: () => import('phantom:seg_xxx.chunk.js'), then segment ID
-        expect(result.clientCode).toContain(`import('phantom:${mod.id}.chunk.js')`);
-        expect(result.clientCode).toContain(`'${mod.id}'`);
+      const groupId = result.chunkModules![0].id;
+      // All stubs point to the same grouped module
+      expect(result.clientCode).toContain(`import('phantom:${groupId}.js')`);
+      // Each segment ID still appears as the second arg to __phantom_lazy
+      for (const segId of result.extractedSegmentIds!) {
+        expect(result.clientCode).toContain(`'${segId}'`);
       }
     });
 
-    it('chunk modules export functions with handler logic', () => {
+    it('grouped chunk module exports functions with handler logic', () => {
       const result = getResult();
-      const allChunkCode = result.chunkModules!.map(m => m.code).join('\n');
-      // Original handler logic should be in chunks
-      expect(allChunkCode).toContain('export function');
-      // At least one chunk should have window/document/localStorage references
+      const groupedCode = result.chunkModules![0].code;
+      // Multiple exported functions in a single module
+      const exportCount = (groupedCode.match(/export function/g) || []).length;
+      expect(exportCount).toBeGreaterThanOrEqual(3);
+      // At least one handler should have window/document/localStorage references
       const hasBrowserAPIs =
-        allChunkCode.includes('window') ||
-        allChunkCode.includes('document') ||
-        allChunkCode.includes('localStorage');
+        groupedCode.includes('window') ||
+        groupedCode.includes('document') ||
+        groupedCode.includes('localStorage');
       expect(hasBrowserAPIs).toBe(true);
     });
 
@@ -72,12 +80,14 @@ describe('extraction engine', () => {
   describe('mixed.tsx', () => {
     const getResult = () => analyzeModule(fixture('mixed.tsx'), 'mixed.tsx');
 
-    it('extracts handleSubmit as EventHandler chunk', () => {
+    it('extracts handleSubmit into grouped chunk module', () => {
       const result = getResult();
       expect(result.hasExtractions).toBe(true);
-      // Only handleSubmit (via useCallback → onSubmit) should be extracted
       expect(result.chunkModules).toBeDefined();
-      expect(result.chunkModules!.length).toBeGreaterThanOrEqual(1);
+      // One grouped module per source file
+      expect(result.chunkModules!.length).toBe(1);
+      expect(result.chunkModules![0].id).toMatch(/^grp_/);
+      expect(result.extractedSegmentIds!.length).toBeGreaterThanOrEqual(1);
     });
 
     it('chunk modules do NOT contain useMemo computation', () => {
@@ -111,9 +121,9 @@ describe('extraction engine', () => {
         confidenceThreshold: 0.95,
       });
 
-      // Low threshold extracts more; high threshold may extract none
-      expect(lowThreshold.chunkModules?.length ?? 0).toBeGreaterThanOrEqual(
-        highThreshold.chunkModules?.length ?? 0,
+      // Low threshold extracts more segments; high threshold may extract none
+      expect(lowThreshold.extractedSegmentIds?.length ?? 0).toBeGreaterThanOrEqual(
+        highThreshold.extractedSegmentIds?.length ?? 0,
       );
     });
   });
@@ -270,14 +280,15 @@ function App() {
       expect(result.chunkModules).toBeUndefined();
     });
 
-    it('segment IDs match between client lazy calls and chunk exports', () => {
+    it('segment IDs match between client lazy calls and grouped chunk exports', () => {
       const result = analyzeModule(fixture('event-handler.tsx'), 'event-handler.tsx');
+      const groupedCode = result.chunkModules![0].code;
 
-      for (const mod of result.chunkModules!) {
+      for (const segId of result.extractedSegmentIds!) {
         // Segment ID appears in client code as lazy argument
-        expect(result.clientCode).toContain(`'${mod.id}'`);
-        // Segment ID appears in chunk module as function name
-        expect(mod.code).toContain(mod.id);
+        expect(result.clientCode).toContain(`'${segId}'`);
+        // Segment ID appears in grouped module as exported function name
+        expect(groupedCode).toContain(segId);
       }
     });
   });
@@ -339,16 +350,15 @@ function App() {
       expect(result.clientMap!.sources).toContain('event-handler.tsx');
     });
 
-    it('chunk modules have valid source maps', () => {
+    it('grouped chunk module has valid source map', () => {
       const result = analyzeModule(fixture('event-handler.tsx'), 'event-handler.tsx');
-      expect(result.chunkModules!.length).toBeGreaterThanOrEqual(3);
+      expect(result.chunkModules!.length).toBe(1);
 
-      for (const mod of result.chunkModules!) {
-        expect(mod.map).toBeDefined();
-        expect(mod.map.version).toBe(3);
-        expect(mod.map.mappings.length).toBeGreaterThan(0);
-        expect(mod.map.sources).toContain('event-handler.tsx');
-      }
+      const mod = result.chunkModules![0];
+      expect(mod.map).toBeDefined();
+      expect(mod.map.version).toBe(3);
+      expect(mod.map.mappings.length).toBeGreaterThan(0);
+      expect(mod.map.sources).toContain('event-handler.tsx');
     });
 
     it('source maps include original source content', () => {
@@ -378,10 +388,10 @@ function App() {
       `;
       const resultA = analyzeModule(code, '/home/user/project/App.tsx');
       const resultB = analyzeModule(code, '/ci/build/workspace/App.tsx');
-      expect(resultA.chunkModules!.length).toBe(1);
-      expect(resultB.chunkModules!.length).toBe(1);
+      expect(resultA.extractedSegmentIds!.length).toBe(1);
+      expect(resultB.extractedSegmentIds!.length).toBe(1);
       // Same code → same segment ID, regardless of file path
-      expect(resultA.chunkModules![0].id).toBe(resultB.chunkModules![0].id);
+      expect(resultA.extractedSegmentIds![0]).toBe(resultB.extractedSegmentIds![0]);
     });
 
     it('arrow function with prelude has expression:false in AST (block body)', () => {
@@ -427,9 +437,9 @@ function App() {
 }
       `;
       const result = analyzeModule(code, 'test.tsx');
-      const segId = result.chunkModules![0].id;
-      // Must have import factory: () => import('phantom:seg_xxx.chunk.js')
-      expect(result.clientCode).toContain(`import('phantom:${segId}.chunk.js')`);
+      const groupId = result.chunkModules![0].id;
+      // Must have import factory: () => import('phantom:grp_xxx.js')
+      expect(result.clientCode).toContain(`import('phantom:${groupId}.js')`);
     });
   });
 });

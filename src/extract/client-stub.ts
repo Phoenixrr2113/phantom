@@ -168,21 +168,25 @@ export function replaceWithStub(
   astNode: ExtractableNode,
   segment: ClassifiedSegment,
   capturedParams: string[],
+  groupedModuleId?: string,
 ): void {
   const originalParamNames = extractParamNames(astNode.params);
 
   // Detect sync event calls BEFORE mutating the node
   const syncMethods = detectSyncEventCalls(astNode);
 
-  // Build the import factory: () => import('phantom:seg_xxx.chunk.js')
+  // Build the import factory: () => import('phantom:grp_xxx.js') or () => import('phantom:seg_xxx.chunk.js')
   // This MUST be a static dynamic import so Rollup/Vite can analyze it
   // and emit the chunk as a separate file for code-splitting.
+  const importPath = groupedModuleId
+    ? `phantom:${groupedModuleId}.js`
+    : `phantom:${segment.id}.chunk.js`;
   const importFactory: ArrowFunctionExpression = {
     type: 'ArrowFunctionExpression',
     params: [],
     body: {
       type: 'ImportExpression',
-      source: { type: 'Literal', value: `phantom:${segment.id}.chunk.js` } as Literal,
+      source: { type: 'Literal', value: importPath } as Literal,
     } as unknown as CallExpression, // ImportExpression is ESTree but not in estree types
     expression: true,
     async: false,

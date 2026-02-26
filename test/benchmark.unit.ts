@@ -118,12 +118,13 @@ describe('performance benchmarks', () => {
       const result1 = analyzeModule(code, '/src/App.tsx', {});
       const result2 = analyzeModule(code, '/src/Other.tsx', {});
 
+      // Group IDs are path-based, so they will differ
       expect(result1.chunkModules!.length).toBe(result2.chunkModules!.length);
 
-      // IDs are content-hashed, so same code produces same IDs
-      const ids1 = result1.chunkModules!.map((c) => c.id).sort();
-      const ids2 = result2.chunkModules!.map((c) => c.id).sort();
-      expect(ids1).toEqual(ids2);
+      // But individual segment IDs are content-hashed, so same code produces same IDs
+      const segIds1 = result1.extractedSegmentIds!.sort();
+      const segIds2 = result2.extractedSegmentIds!.sort();
+      expect(segIds1).toEqual(segIds2);
     });
   });
 });

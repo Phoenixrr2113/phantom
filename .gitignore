@@ -43,6 +43,9 @@ Thumbs.db
 # Claude Code
 .claude/
 
+# SPX benchmark results (machine-specific)
+benchmarks/spx-results/
+
 # Internal planning docs
 PLAN.md
 ARCHITECTURE.md
