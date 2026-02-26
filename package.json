@@ -1,6 +1,6 @@
 {
   "name": "phantom-build",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Automatic code-splitting for React — extracts event handlers into lazy-loaded chunks and wraps below-fold components in React.lazy + Suspense at build time",
   "type": "module",
   "main": "./dist/index.js",
