@@ -62,6 +62,24 @@ export default {
 };
 ```
 
+### Rsbuild
+
+```ts
+// rsbuild.config.ts
+import { defineConfig } from '@rsbuild/core';
+import { pluginReact } from '@rsbuild/plugin-react';
+import phantom from 'phantom-build/rspack';
+
+export default defineConfig({
+  plugins: [pluginReact()],
+  tools: {
+    rspack: {
+      plugins: [phantom()],
+    },
+  },
+});
+```
+
 That's it. Run your build and Phantom handles the rest.
 
 ## How It Works

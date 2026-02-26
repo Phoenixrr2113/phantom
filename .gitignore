@@ -28,6 +28,10 @@ integration-test-webpack/dist/
 integration-test-webpack/node_modules/
 integration-test-webpack/phantom.manifest.json
 integration-test-webpack/*.lazy-cache.json
+integration-test-rsbuild/dist/
+integration-test-rsbuild/node_modules/
+integration-test-rsbuild/phantom.manifest.json
+integration-test-rsbuild/*.lazy-cache.json
 
 # OS files
 .DS_Store
