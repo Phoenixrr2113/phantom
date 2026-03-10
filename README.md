@@ -10,7 +10,7 @@ npm install phantom-build
 
 ## What It Does
 
-Phantom runs at build time (Vite or Webpack) and does two things:
+Phantom runs at build time (Vite, Webpack, or Rspack) and does two things:
 
 **1. Handler extraction** — Event handlers that touch browser APIs (`window`, `document`, `localStorage`, etc.) are extracted into separate chunks and loaded on-demand when the user first interacts.
 
@@ -112,7 +112,7 @@ export function InteractiveComponent() {
 Phantom produces:
 
 - **Client code** — handlers are replaced with lightweight stubs that lazy-load the real logic on first click
-- **Chunk modules** — each handler's logic lives in its own small file, loaded on demand
+- **Chunk modules** — handlers from the same source file are grouped into a single chunk module, loaded on demand
 
 The stub calls `e.preventDefault()` and `e.stopPropagation()` synchronously (before the import), so critical event behavior is never delayed. The heavy logic (`window.location.href`, `localStorage`, etc.) loads asynchronously.
 
@@ -227,6 +227,12 @@ phantom({
 
   // SSR mode: skip all transforms for server builds. Default: false
   ssr: false,
+
+  // Automatically detect SSR boundaries for components.
+  // 'auto': Analyze and add results to manifest (report-only)
+  // 'annotate': Prepend "use client" to ClientOnly modules
+  // false: Disabled (default)
+  ssrBoundaries: false,
 })
 ```
 
@@ -262,6 +268,24 @@ export default {
     phantom({ ssr: true }),
   ],
 };
+```
+
+#### Rsbuild
+
+```ts
+// rsbuild.config.server.ts
+import { defineConfig } from '@rsbuild/core';
+import { pluginReact } from '@rsbuild/plugin-react';
+import phantom from 'phantom-build/rspack';
+
+export default defineConfig({
+  plugins: [pluginReact()],
+  tools: {
+    rspack: {
+      plugins: [phantom({ ssr: true })],
+    },
+  },
+});
 ```
 
 #### Typical Setup
@@ -492,7 +516,7 @@ node benchmarks/lighthouse-compare.mjs --runs=5
 
 - Node.js >= 18
 - React 16.6+ (for `React.lazy` and `Suspense`)
-- Vite or Webpack
+- Vite, Webpack, or Rspack (Rsbuild)
 - For SSR: any custom server setup (Express, .NET, etc.) — not framework-specific
 
 ## License
