@@ -71,19 +71,24 @@
   "author": "Randy Wilson",
   "dependencies": {
     "eslint-scope": "^8.3.0",
-    "esrap": "^2.2.3",
+    "esrap": "^2.2.4",
     "oxc-parser": "^0.72.1",
     "unplugin": "^2.3.2"
   },
   "devDependencies": {
     "@types/eslint-scope": "^3.7.7",
     "@types/estree": "^1.0.6",
-    "@types/node": "^25.2.3",
+    "@types/node": "^25.5.0",
     "typescript": "^5.7.0",
     "vitest": "^3.0.0"
   },
   "license": "MIT",
   "engines": {
     "node": ">=18.0.0"
+  },
+  "pnpm": {
+    "overrides": {
+      "rollup": "^4.59.0"
+    }
   }
 }

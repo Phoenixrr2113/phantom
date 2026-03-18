@@ -91,7 +91,45 @@ interface LazyRefinementCache {
  */
 const LLM_BATCH_DEBOUNCE_MS = 50;
 
+/**
+ * Validate PhantomPluginOptions and throw a descriptive error for invalid values.
+ * Called once at plugin initialisation so mistakes surface immediately at build startup.
+ */
+function validateOptions(options: PhantomPluginOptions): void {
+  if (options.confidenceThreshold !== undefined) {
+    const ct = options.confidenceThreshold;
+    if (typeof ct !== 'number' || Number.isNaN(ct) || ct < 0 || ct > 1) {
+      throw new Error(
+        `[phantom] Invalid option "confidenceThreshold": expected a number between 0 and 1, got ${JSON.stringify(ct)}. ` +
+        `Hint: use a value like 0.8 (80% confidence required to extract a handler).`,
+      );
+    }
+  }
+
+  if (options.minHandlerSize !== undefined) {
+    const mhs = options.minHandlerSize;
+    if (typeof mhs !== 'number' || Number.isNaN(mhs) || mhs < 0 || !Number.isFinite(mhs)) {
+      throw new Error(
+        `[phantom] Invalid option "minHandlerSize": expected a non-negative number (bytes), got ${JSON.stringify(mhs)}. ` +
+        `Hint: use 0 to extract all handlers, or 200 (the default) to skip tiny handlers where the stub adds more bytes than it saves.`,
+      );
+    }
+  }
+
+  if (options.preloadStrategy !== undefined) {
+    const ps = options.preloadStrategy;
+    if (ps !== 'idle' && ps !== 'none') {
+      throw new Error(
+        `[phantom] Invalid option "preloadStrategy": expected "idle" or "none", got ${JSON.stringify(ps)}. ` +
+        `Hint: use "idle" to inject requestIdleCallback modulepreload hints, or "none" (the default) to load chunks on-demand.`,
+      );
+    }
+  }
+}
+
 export const phantom = createUnplugin((options: PhantomPluginOptions = {}) => {
+  validateOptions(options);
+
   // ── Shared state accumulated across transform calls ──────────────────
   const chunkModuleMap = new Map<string, { code: string; map: SourceMapLike }>();
   const manifestEntries: ManifestEntry[] = [];
