@@ -476,7 +476,13 @@ export const phantom = createUnplugin((options: PhantomPluginOptions = {}) => {
           segments = classifyModule(parsed, code);
         }
       } catch (err) {
-        console.warn(`[phantom] Skipping ${id}:`, err instanceof Error ? err.message : err);
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(
+          `[phantom] TRANSFORM_SKIP: Could not analyse ${id} — no Phantom transforms will be applied to this file.\n` +
+          `  Reason: ${msg}\n` +
+          `  Hint: If this file should be ignored intentionally, add it to the "exclude" option. ` +
+          `Set "silent: true" to suppress this warning.`,
+        );
         return null;
       }
 
@@ -489,9 +495,13 @@ export const phantom = createUnplugin((options: PhantomPluginOptions = {}) => {
           }
         } catch (ssrErr) {
           if (!options.silent) {
+            const ssrMsg = ssrErr instanceof Error ? ssrErr.message : String(ssrErr);
             console.warn(
-              `[phantom] SSR boundary analysis failed for ${id}:`,
-              ssrErr instanceof Error ? ssrErr.message : ssrErr,
+              `[phantom] SSR_ANALYSIS_ERROR: SSR boundary detection failed for ${id} — ` +
+              `the file will be treated as having no SSR boundaries.\n` +
+              `  Reason: ${ssrMsg}\n` +
+              `  Hint: If this recurs, set "ssrBoundaries: false" to disable SSR analysis entirely, ` +
+              `or "silent: true" to suppress this warning.`,
             );
           }
         }

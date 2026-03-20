@@ -38,8 +38,13 @@ export function parseModule(code: string, path: string): AnalyzedModule {
 
   // Bail early on parse errors — partial ASTs cause cryptic downstream failures
   if (parseResult.errors.length > 0) {
-    const errMsg = parseResult.errors.map((e: { message: string }) => e.message).join(', ');
-    throw new Error(`[phantom] Parse errors in ${path}: ${errMsg}`);
+    const errMsg = parseResult.errors.map((e: { message: string }) => e.message).join('; ');
+    throw new Error(
+      `[phantom] PARSE_ERROR: Failed to parse ${path}\n` +
+      `  Errors: ${errMsg}\n` +
+      `  Hint: Verify the file has valid syntax and that its extension matches its content ` +
+      `(e.g. .tsx for files with JSX). Phantom will skip this file and leave it untransformed.`,
+    );
   }
 
   const ast = parseResult.program as unknown as Program;
