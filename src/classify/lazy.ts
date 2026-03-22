@@ -356,7 +356,12 @@ function findJSXUsages(
       conditional: context.isConditional,
     };
 
-    result.get(tagName.name)!.push(usage);
+    const usageList = result.get(tagName.name);
+    if (!usageList) {
+      console.warn(`[phantom] Skipping JSX usage of "${tagName.name}" — not found in result map. This is likely a bug; please report it.`);
+      return;
+    }
+    usageList.push(usage);
   });
 
   return result;

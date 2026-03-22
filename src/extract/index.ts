@@ -69,11 +69,17 @@ export function extractModule(
   for (const segment of extractable) {
     // Find the AST node in the ORIGINAL tree (for chunk module generation)
     const originalNode = findASTNode(analyzed.ast, segment.span);
-    if (!originalNode) continue;
+    if (!originalNode) {
+      console.warn(`[phantom] Skipping segment "${segment.id}" — no matching AST node found in original tree (span ${segment.span.start}:${segment.span.end}). This may indicate an AST/span mismatch.`);
+      continue;
+    }
 
     // Find the corresponding node in the CLONED tree (for client mutation)
     const clientNode = findASTNode(clientAST, segment.span);
-    if (!clientNode) continue;
+    if (!clientNode) {
+      console.warn(`[phantom] Skipping segment "${segment.id}" — no matching AST node found in cloned tree (span ${segment.span.start}:${segment.span.end}). Cloning may have altered node positions.`);
+      continue;
+    }
 
     // Separate captured vars from imports (rewrites relative paths to absolute)
     const resolution = resolveImports(segment, analyzed, sourceFilePath);
