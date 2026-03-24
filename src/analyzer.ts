@@ -27,6 +27,15 @@ function getLang(path: string): 'js' | 'jsx' | 'ts' | 'tsx' {
 /**
  * Parse a module and perform scope analysis.
  * Returns the AST, function dependency info, and import info.
+ *
+ * @param code - The source code of the module to parse.
+ * @param path - The file path of the module (used to infer language and improve error messages).
+ * @returns An {@link AnalyzedModule} containing the AST, function dependencies, imports, and re-exports.
+ * @throws {Error} If the source code contains syntax errors (`[phantom] PARSE_ERROR`).
+ *
+ * @example
+ * const analyzed = parseModule(`export const add = (a: number, b: number) => a + b;`, 'math.ts');
+ * console.log(analyzed.functions.map(f => f.name)); // ['add']
  */
 export function parseModule(code: string, path: string): AnalyzedModule {
   // 1. Parse with OXC
@@ -338,6 +347,25 @@ function walkWithParent(
 
 /**
  * Analyze a single module: parse → scope analysis → classify → extract.
+ *
+ * This is the main entry point for programmatic use of the phantom-build analysis pipeline.
+ * It runs all four phases (parsing, classification, lazy detection, extraction) and returns
+ * a complete {@link AnalysisResult} describing what was found and what was extracted.
+ *
+ * @param code - The source code of the module to analyze.
+ * @param path - The file path of the module (used for language detection and chunk IDs).
+ * @param _options - Optional plugin configuration (e.g. `confidenceThreshold`, `minHandlerSize`).
+ * @returns An {@link AnalysisResult} with classified segments, extracted chunks, and lazy candidates.
+ * @throws {Error} If the source code has syntax errors (propagated from {@link parseModule}).
+ *
+ * @example
+ * import { analyzeModule } from 'phantom-build';
+ *
+ * const result = analyzeModule(sourceCode, '/src/MyComponent.tsx', { confidenceThreshold: 0.9 });
+ * if (result.hasExtractions) {
+ *   console.log('Extracted segments:', result.extractedSegmentIds);
+ *   console.log('Chunk modules:', result.chunkModules?.map(c => c.id));
+ * }
  */
 export function analyzeModule(
   code: string,

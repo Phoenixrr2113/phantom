@@ -19,6 +19,15 @@ export interface ClassificationContext {
  * Pass 1: Taint analysis — mark functions that reference browser APIs
  * Pass 2: Purity analysis — determine if non-tainted functions are pure
  * Pass 3: Boundary detection — classify and identify extraction candidates
+ *
+ * @param analyzed - The parsed and scope-analyzed module from {@link parseModule}.
+ * @param sourceCode - The original source code string (used for extracting source text spans).
+ * @returns An array of {@link ClassifiedSegment} objects, one per function in the module.
+ *
+ * @example
+ * const analyzed = parseModule(code, 'MyComponent.tsx');
+ * const segments = classifyModule(analyzed, code);
+ * const handlers = segments.filter(s => s.classification === 'EventHandler');
  */
 export function classifyModule(
   analyzed: AnalyzedModule,
@@ -31,6 +40,15 @@ export function classifyModule(
  * Run classification and return intermediate results for SSR analysis.
  * The SSR boundary detector needs taintResults, hookContexts, and
  * eventHandlerContexts to avoid redundant AST walks.
+ *
+ * @param analyzed - The parsed and scope-analyzed module from {@link parseModule}.
+ * @param sourceCode - The original source code string (used for extracting source text spans).
+ * @returns A {@link ClassificationContext} with classified segments plus intermediate taint,
+ *   hook, and event handler maps for use by downstream SSR boundary detection.
+ *
+ * @example
+ * const analyzed = parseModule(code, 'MyComponent.tsx');
+ * const { segments, taintResults } = classifyModuleWithContext(analyzed, code);
  */
 export function classifyModuleWithContext(
   analyzed: AnalyzedModule,
@@ -354,6 +372,17 @@ function detectEventHandlerContexts(
 
 /**
  * Simple recursive AST walker.
+ *
+ * Traverses all nodes in an ESTree-compatible AST, invoking `callback` for each node
+ * that has a `type` string property. Array children and nested objects are visited depth-first.
+ *
+ * @param node - The root node (or any value) to start walking from.
+ * @param callback - Called with each discovered AST {@link Node}.
+ *
+ * @example
+ * walkNode(ast, (node) => {
+ *   if (node.type === 'Identifier') console.log((node as Identifier).name);
+ * });
  */
 export function walkNode(node: unknown, callback: (node: Node) => void): void {
   if (!node || typeof node !== 'object') return;

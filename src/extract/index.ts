@@ -22,10 +22,29 @@ export interface ExtractionResult {
  * with multiple named exports. This reduces the number of HTTP requests and
  * improves gzip compression compared to one-chunk-per-handler.
  *
- * Returns null if no segments qualify for extraction,
+ * Returns `null` if no segments qualify for extraction,
  * otherwise returns rewritten client code + chunk modules.
  *
  * Uses proper AST-based codegen with esrap — no source text splicing.
+ *
+ * @param analyzed - The parsed and scope-analyzed module (provides AST and dependency info).
+ * @param segments - Classified segments from {@link classifyModule} to consider for extraction.
+ * @param _sourceCode - The original source code (used for source map generation).
+ * @param confidenceThreshold - Minimum confidence score (0–1) for a segment to be extracted.
+ * @param sourceFilePath - Absolute path to the source file (used for chunk IDs and import resolution).
+ * @param lazyCandidates - Optional lazy-loading candidates from `detectLazyCandidates`.
+ * @param minHandlerSize - Minimum handler byte size to qualify for extraction (default: 200).
+ * @returns An {@link ExtractionResult} with rewritten client code and chunk modules,
+ *   or `null` if nothing was extracted.
+ *
+ * @example
+ * const analyzed = parseModule(code, '/src/Form.tsx');
+ * const segments = classifyModule(analyzed, code);
+ * const result = extractModule(analyzed, segments, code, 0.8, '/src/Form.tsx');
+ * if (result) {
+ *   // result.clientCode — the rewritten source with lazy stubs
+ *   // result.chunkModules — the handler chunk(s) to emit as separate files
+ * }
  */
 export function extractModule(
   analyzed: AnalyzedModule,
