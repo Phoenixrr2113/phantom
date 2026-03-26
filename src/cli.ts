@@ -10,12 +10,44 @@ function printUsage(): void {
   console.log(`
 Usage: phantom analyze <file> [options]
 
-Analyze a single file and print segment classification details.
+  Analyze a React/TypeScript file and print segment classification details,
+  showing which event handlers would be extracted into lazy-loaded chunks.
+
+Commands:
+  analyze <file>    Analyze a single .tsx/.ts file for extractable segments
 
 Options:
-  --threshold <number>          Confidence threshold for extraction (default: 0.8)
-  --min-handler-size <number>   Min handler bytes to extract (default: 200)
+  --threshold <0-1>             Confidence threshold for extraction (default: 0.8)
+                                  Higher values extract fewer, more certain handlers.
+                                  Lower values extract more aggressively.
+  --min-handler-size <bytes>    Minimum handler size in bytes to consider for
+                                  extraction (default: 200). Set to 0 to see all
+                                  handlers regardless of size.
   --help, -h                    Show this help message
+
+Examples:
+  phantom analyze src/components/Button.tsx
+  phantom analyze src/components/Form.tsx --threshold 0.9
+  phantom analyze src/components/Modal.tsx --threshold 0.7 --min-handler-size 0
+
+Output columns:
+  Name          Handler or component name
+  Class         EventHandler | PureComputation | Unknown
+  Conf          Confidence score (0.00–1.00)
+  Extracted?    Whether the handler will be split into a lazy chunk
+
+Troubleshooting:
+  No segments found
+    → The file may have no detectable event handlers (onClick, onChange, etc.)
+    → Try lowering --threshold or setting --min-handler-size 0
+
+  Unexpected handlers kept static
+    → Raise --threshold closer to 1.0 to keep more handlers in the main bundle
+    → Handlers using the 'this' keyword or context providers are never extracted
+
+  Parse errors
+    → Ensure the file has valid syntax and the extension matches its content
+      (.tsx for files with JSX, .ts for plain TypeScript)
 `.trim());
 }
 
