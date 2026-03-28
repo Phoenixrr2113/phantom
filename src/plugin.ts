@@ -565,6 +565,11 @@ export const phantom = createUnplugin((options: PhantomPluginOptions = {}) => {
         }
       }
 
+      // Warn about common mistakes that may cause unexpected behavior
+      if (!options.silent) {
+        warnCommonMistakes(code, id, segments, lazyCandidates, lazyKeptStatic, options.minHandlerSize ?? 200);
+      }
+
       // Apply cached LLM decisions if available (avoids LLM call entirely)
       let usedCache = false;
       if (lazyCandidates && lazyCandidates.length > 0 && refinementCache) {
@@ -903,6 +908,63 @@ function inferComponentName(filePath: string): string {
   const base = basename(filePath);
   const dotIdx = base.indexOf('.');
   return dotIdx > 0 ? base.slice(0, dotIdx) : base;
+}
+
+// ── Common mistake warnings ───────────────────────────────────────────
+
+/**
+ * Warn about common handler/lazy patterns that may cause unexpected behaviour.
+ * Called once per transformed module, after classification and lazy detection.
+ */
+function warnCommonMistakes(
+  code: string,
+  id: string,
+  segments: ClassifiedSegment[],
+  lazyCandidates: LazyCandidate[] | undefined,
+  lazyKeptStatic: Array<{ localName: string; source: string; reason: string }> | undefined,
+  minHandlerSize: number,
+): void {
+  const handlerSegments = segments.filter((s) => s.classification === 'EventHandler');
+
+  // 1. Handlers that reference `this` — will break when extracted out of class context
+  for (const seg of handlerSegments) {
+    const handlerCode = code.slice(seg.span.start, seg.span.end);
+    if (/\bthis\b/.test(handlerCode)) {
+      console.warn(
+        `[phantom] THIS_IN_HANDLER: Handler "${seg.name}" in ${id} references "this".\n` +
+        `  Extracted handlers run outside their original class context — "this" will be undefined at runtime.\n` +
+        `  Fix: Use arrow function class fields (handleClick = () => {...}) or bind in the constructor.`,
+      );
+    }
+  }
+
+  // 2. Context providers that were kept static (informational — explains why they weren't lazified)
+  if (lazyKeptStatic) {
+    for (const kept of lazyKeptStatic) {
+      if (kept.reason.includes('Context provider')) {
+        console.warn(
+          `[phantom] CONTEXT_PROVIDER_STATIC: "${kept.localName}" (from "${kept.source}") in ${id} was kept static because it is a context provider.\n` +
+          `  Context providers must be mounted before consumers render — lazy loading would leave consumers with the default context value until the chunk loads.\n` +
+          `  Tip: This is correct behaviour. To code-split, extract non-provider logic into a separate lazily-imported component.`,
+        );
+      }
+    }
+  }
+
+  // 3. Event handlers too small to be worth extracting (stub overhead exceeds savings)
+  const smallHandlers = handlerSegments.filter((s) => {
+    const size = s.span.end - s.span.start;
+    return size > 0 && size < minHandlerSize;
+  });
+  if (smallHandlers.length > 0) {
+    const summary = smallHandlers
+      .map((s) => `${s.name} (${s.span.end - s.span.start}b)`)
+      .join(', ');
+    console.warn(
+      `[phantom] SMALL_HANDLERS: ${smallHandlers.length} handler(s) in ${id} are below the minHandlerSize threshold (${minHandlerSize}b) and will not be extracted: ${summary}.\n` +
+      `  Hint: Small handlers produce stubs larger than the handler itself. Lower minHandlerSize to force extraction, or add more logic to justify it.`,
+    );
+  }
 }
 
 // ── Build summary ──────────────────────────────────────────────────────
