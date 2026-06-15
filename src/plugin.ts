@@ -127,7 +127,13 @@ function validateOptions(options: PhantomPluginOptions): void {
   }
 }
 
-export const phantom = createUnplugin((options: PhantomPluginOptions = {}) => {
+// `<PhantomPluginOptions | undefined>` makes the generated factories
+// (phantom.vite, .webpack, .rspack, …) callable with no arguments. unplugin
+// only types the options parameter as optional when `undefined extends
+// UserOptions`, and every PhantomPluginOptions field is already optional, so
+// the natural `phantom()` call should type-check. The `= {}` default supplies
+// the runtime value when called without options.
+export const phantom = createUnplugin<PhantomPluginOptions | undefined>((options = {}) => {
   validateOptions(options);
 
   // ── Shared state accumulated across transform calls ──────────────────
