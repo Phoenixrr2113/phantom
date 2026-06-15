@@ -401,6 +401,41 @@ For a route component (path contains `/pages/`), each child component import is 
   └────────────────┴──────────────────────────────────────────────────────────────────────────┘
 ```
 
+### Phase 3 Safety Rules (disqualified before any prefetch decision)
+
+Before a component is considered for lazy loading, it must survive a set of
+safety gates. These run ahead of the fold/conditional heuristics above — a
+component that hits any of them is never lazified (see `src/classify/lazy.ts`):
+
+```
+  Rule                              Why                                       Result
+  ─────────────────────────────────────────────────────────────────────────────────────
+  Namespace import                  `import * as X` has no single default/      not a
+  (import * as X)                   named binding for React.lazy to resolve.    candidate
+
+  Used as a runtime value           React.lazy returns an opaque                KEEP STATIC
+  (not only as a <X /> tag)         LazyExoticComponent, valid only as a
+                                    Suspense-wrapped JSX child. Value uses
+                                    like `X.displayName`, `component={X}`,
+                                    `memo(X)`, or `X()` would break.
+
+  Context provider                  Must hydrate before its consumers render.   KEEP STATIC
+  (name ends Provider/Context,
+   or wraps JSX children)
+
+  Above the fold                    Suspense overhead + a loading waterfall     KEEP STATIC
+  (position < 2 in a route)         hurt LCP for initial-viewport content.
+
+  Low JS cost                       Below the size threshold the Suspense       KEEP STATIC
+  (when a profile is available)     boundary costs more than it saves.
+```
+
+Note on the value-usage rule: TypeScript *type* positions (`typeof X`, `: X`,
+`X<…>`) are erased at build time and do **not** disqualify a component, but
+value-carrying TS expressions (`X as T`, `X!`, `X satisfies T`) keep `X` as a
+runtime value and **do** keep it static. The rule is conservative by design: a
+false positive only forgoes an optimization, it never emits code that breaks.
+
 ### Phase 4 Output: Lazy Transforms Applied
 
 The extraction phase rewrites the imports and JSX:

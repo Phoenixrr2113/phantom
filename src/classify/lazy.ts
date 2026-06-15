@@ -91,11 +91,33 @@ export function detectLazyCandidates(
   // Step 4: Determine if this module is a route-level component
   const isRouteComponent = checkIsRouteComponent(analyzed.path, analyzed.ast);
 
+  // Step 4b: Find component bindings that are referenced as runtime *values*
+  // (not only as JSX element tags). React.lazy returns an opaque
+  // LazyExoticComponent that is valid solely as a Suspense-wrapped JSX child;
+  // converting such a binding would silently break value usages like
+  // `Foo.displayName`, `component={Foo}`, `memo(Foo)`, or `Foo()`.
+  const valueReferencedNames = collectValueReferencedNames(
+    analyzed.ast,
+    new Set(componentImports.map((c) => c.localName)),
+  );
+
   // Step 5: Evaluate each component import
   for (const imp of componentImports) {
     const usages = jsxUsageMap.get(imp.localName);
     if (!usages || usages.length === 0) {
       // Imported but never used in JSX — skip (might be a utility, HOC, etc.)
+      continue;
+    }
+
+    // Rule 0: If the binding is used as a runtime value anywhere (not only as
+    // a JSX tag), it cannot be safely wrapped in React.lazy — keep it static.
+    if (valueReferencedNames.has(imp.localName)) {
+      keepStatic.push({
+        localName: imp.localName,
+        source: imp.source,
+        reason:
+          'Used as a runtime value (not only as a JSX element) — React.lazy would break non-JSX references',
+      });
       continue;
     }
 
@@ -203,9 +225,12 @@ function findComponentImports(
     if (!isRelativeImport(imp.source)) continue;
 
     for (const spec of imp.specifiers) {
+      // Namespace imports (import * as Foo) have no single binding React.lazy
+      // can resolve — never treat them as lazifiable component candidates.
+      if (spec.kind === 'namespace') continue;
       if (isPascalCase(spec.local)) {
         let resolvedSource: string | null = null;
-        let importKind = spec.kind;
+        let importKind: 'default' | 'named' | 'namespace' = spec.kind;
         let importedName = spec.imported;
 
         // Try to resolve through barrel files
@@ -365,6 +390,69 @@ function findJSXUsages(
   });
 
   return result;
+}
+
+// ── Value-usage detection ───────────────────────────────────────────────
+
+/**
+ * Find which of the given binding names are referenced as runtime *values*
+ * somewhere in the module — i.e. anywhere other than as a JSX element tag.
+ *
+ * JSX element/attribute names are `JSXIdentifier` nodes, so a `<Foo />` usage
+ * never matches here; only plain `Identifier` references do. We exclude
+ * positions that aren't real value reads of the binding:
+ *   - the import specifier that declares the binding (`import { Foo }`)
+ *   - a non-computed member *property* (`obj.Foo` — `Foo` names a property)
+ *   - a non-computed, non-shorthand object property *key* (`{ Foo: ... }`)
+ *
+ * Everything else (`const x = Foo`, `component={Foo}`, `memo(Foo)`,
+ * `Foo.displayName`, `{ Foo }` shorthand, `Foo()`) counts as a value usage.
+ *
+ * Conservative by design: a false positive only keeps a component static
+ * (a missed optimization), never lazifies something that would break.
+ */
+function collectValueReferencedNames(ast: Node, candidateNames: Set<string>): Set<string> {
+  const found = new Set<string>();
+  if (candidateNames.size === 0) return found;
+
+  walkWithParentNode(ast, null, (node, parent) => {
+    if ((node.type as string) !== 'Identifier') return;
+    const name = (node as Identifier).name;
+    if (!candidateNames.has(name) || found.has(name)) return;
+    if (!parent) return;
+
+    const p = parent as unknown as Record<string, unknown>;
+    const pType = p.type as string;
+
+    // The import binding declaration itself — not a usage.
+    if (
+      pType === 'ImportSpecifier' ||
+      pType === 'ImportDefaultSpecifier' ||
+      pType === 'ImportNamespaceSpecifier'
+    ) {
+      return;
+    }
+
+    // Member *property* name: `obj.Foo` (the binding would be the object, not here).
+    if (pType === 'MemberExpression' && p.property === node && p.computed === false) return;
+
+    // Object property *key*: `{ Foo: ... }` (shorthand `{ Foo }` still counts).
+    if (pType === 'Property' && p.key === node && p.shorthand === false && p.computed === false) {
+      return;
+    }
+
+    // TypeScript *type* positions are erased at build time and can't break a
+    // lazy component at runtime: `typeof Foo`, `: Foo`, `Foo<...>`, `A.Foo`.
+    // Note: value-carrying TS wrappers (`Foo as X`, `Foo!`, `Foo satisfies X`)
+    // keep `Foo` as a runtime expression, so they are NOT excluded here.
+    if (pType === 'TSTypeQuery' && p.exprName === node) return;
+    if (pType === 'TSTypeReference' && p.typeName === node) return;
+    if (pType === 'TSQualifiedName') return;
+
+    found.add(name);
+  });
+
+  return found;
 }
 
 // ── Context provider detection ──────────────────────────────────────────
