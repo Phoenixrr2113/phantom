@@ -31,16 +31,20 @@ export function applyLazyTransforms(
   ast: Program,
   candidates: LazyCandidate[],
 ): void {
-  if (candidates.length === 0) return;
+  // Namespace imports (import * as Foo) have no single default/named binding
+  // that React.lazy can resolve. Drop them so we never rewrite the import,
+  // wrap the usage in Suspense, or inject unused `lazy`/`Suspense` imports.
+  const lazyCandidates = candidates.filter((c) => c.importKind !== 'namespace');
+  if (lazyCandidates.length === 0) return;
 
   // Step 1: Rewrite imports → lazy declarations
-  for (const candidate of candidates) {
+  for (const candidate of lazyCandidates) {
     rewriteImportToLazy(ast, candidate);
   }
 
   // Step 2: Wrap JSX usages in Suspense boundaries
   // Group candidates by suspenseGroup for batch wrapping
-  const grouped = groupBySuspense(candidates);
+  const grouped = groupBySuspense(lazyCandidates);
   for (const group of grouped) {
     wrapInSuspense(ast, group);
   }
