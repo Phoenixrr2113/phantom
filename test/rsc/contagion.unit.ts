@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { computeContagion } from '../../src/rsc/contagion.js';
+import { computeContagion, computeFrontier } from '../../src/rsc/contagion.js';
 import type { ComponentGraph, RscFileResult } from '../../src/rsc/types.js';
 
 function makeGraph(spec: Record<string, { v: RscFileResult['fileVerdict']; imports: string[]; bytes?: number }>): ComponentGraph {
@@ -57,5 +57,49 @@ describe('computeContagion', () => {
     expect(r.realizableServer.has('/b.tsx')).toBe(true);
     expect(r.realizableServerBytes).toBe(30);
     expect(r.clientClosure.has('/c.tsx')).toBe(true);
+  });
+});
+
+describe('computeFrontier', () => {
+  it('returns only the topmost client node (minimal set)', () => {
+    const g = makeGraph({
+      '/App.tsx':     { v: 'must-be-client',  imports: ['/Layout.tsx'] },
+      '/Layout.tsx':  { v: 'server-eligible', imports: ['/Card.tsx'] }, // client by contagion
+      '/Card.tsx':    { v: 'server-eligible', imports: [] },            // client by contagion
+      '/Sidebar.tsx': { v: 'server-eligible', imports: [] },
+    });
+    const { clientClosure } = computeContagion(g);
+    const frontier = computeFrontier(g, clientClosure);
+    expect(frontier.has('/App.tsx')).toBe(true);
+    expect(frontier.has('/Layout.tsx')).toBe(false); // inherits from App
+    expect(frontier.has('/Card.tsx')).toBe(false);   // inherits transitively
+    expect(frontier.size).toBe(1);
+  });
+
+  it('a client child imported only by a SERVER parent is on the frontier (server parent stays server)', () => {
+    const g = makeGraph({
+      '/Page.tsx':   { v: 'server-eligible', imports: ['/Widget.tsx'] },
+      '/Widget.tsx': { v: 'must-be-client',  imports: [] },
+    });
+    const { clientClosure, realizableServer } = computeContagion(g);
+    const frontier = computeFrontier(g, clientClosure);
+    expect(frontier.has('/Widget.tsx')).toBe(true);
+    expect(frontier.has('/Page.tsx')).toBe(false);
+    expect(realizableServer.has('/Page.tsx')).toBe(true); // server parent NOT dragged client
+    expect(frontier.size).toBe(1);
+  });
+
+  it('two independent client roots sharing a contaminated child both stay on the frontier', () => {
+    const g = makeGraph({
+      '/A.tsx': { v: 'must-be-client',  imports: ['/Shared.tsx'] },
+      '/B.tsx': { v: 'must-be-client',  imports: ['/Shared.tsx'] },
+      '/Shared.tsx': { v: 'server-eligible', imports: [] },
+    });
+    const { clientClosure } = computeContagion(g);
+    const frontier = computeFrontier(g, clientClosure);
+    expect(frontier.has('/A.tsx')).toBe(true);
+    expect(frontier.has('/B.tsx')).toBe(true);
+    expect(frontier.has('/Shared.tsx')).toBe(false); // inherits from both
+    expect(frontier.size).toBe(2);
   });
 });

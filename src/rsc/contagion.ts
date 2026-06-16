@@ -56,3 +56,31 @@ export function computeContagion(graph: ComponentGraph): ContagionResult {
 
   return { clientClosure, realizableServer, realizableServerBytes };
 }
+
+/**
+ * Compute the minimal `'use client'` frontier: the topmost client files. A
+ * client file is on the frontier iff NO other client file imports it — i.e.
+ * its client-ness isn't already inherited from a client importer. Marking only
+ * these files is the smallest directive set that is still correct, because
+ * `'use client'` propagates to a module's imports.
+ */
+export function computeFrontier(
+  graph: ComponentGraph,
+  clientClosure: ReadonlySet<string>,
+): Set<string> {
+  // Which client files are imported by some *client* file (and thus inherit the directive)?
+  const importedByClient = new Set<string>();
+  for (const file of clientClosure) {
+    const node = graph.files.get(file);
+    if (!node) continue;
+    for (const imported of node.imports) {
+      if (clientClosure.has(imported)) importedByClient.add(imported);
+    }
+  }
+  // Frontier = client files that no client file imports.
+  const frontier = new Set<string>();
+  for (const file of clientClosure) {
+    if (!importedByClient.has(file)) frontier.add(file);
+  }
+  return frontier;
+}
