@@ -32,6 +32,8 @@ export interface RscFileResult {
   components: RscComponentResult[];
   imports: string[]; // resolved absolute paths of component imports
   sizeBytes: number; // file source size
+  /** Local imported binding name (the JSX tag) → resolved absolute file. Populated by buildComponentGraph. */
+  importedComponents?: Map<string, string>;
 }
 
 /** The resolved component import graph plus an edge-resolution coverage stat. */

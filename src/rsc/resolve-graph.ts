@@ -228,6 +228,7 @@ export function buildComponentGraph(dir: string): ComponentGraph {
   for (const [file, analyzed] of parsed) {
     const result = results.get(file)!;
     const targets = new Set<string>();
+    const localToTarget = new Map<string, string>();
     for (const imp of analyzed.imports) {
       if (!isCountableInternal(imp.source, aliasPrefixes)) continue;
       totalEdges++;
@@ -238,10 +239,14 @@ export function buildComponentGraph(dir: string): ComponentGraph {
       // rather than the true defining module — a known precision limit, not a miss.
       for (const spec of imp.specifiers) {
         const target = resolveEdge(imp.source, file, spec.imported, fileSet, reExportsByFile, matcher);
-        if (target) targets.add(target);
+        if (target) {
+          targets.add(target);
+          localToTarget.set(spec.local, target);
+        }
       }
     }
     result.imports = [...targets];
+    result.importedComponents = localToTarget;
   }
 
   const edgeResolution = totalEdges === 0 ? 1 : resolvedEdges / totalEdges;
