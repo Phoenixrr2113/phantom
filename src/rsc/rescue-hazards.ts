@@ -1,4 +1,7 @@
 import { basename } from 'node:path';
+import type { Node } from 'estree';
+import { walkNode } from '../classify/index.js';
+import type { AnalyzedModule } from '../types.js';
 import type { ComponentGraph } from './types.js';
 import type { ContagionResult } from './contagion.js';
 
@@ -51,4 +54,76 @@ export function findRescues(graph: ComponentGraph, contagion: ContagionResult): 
     });
   }
   return rescues;
+}
+
+// ── Serialization Hazard Detection ────────────────────────────────────
+
+export interface SerializationHazard {
+  file: string;
+  component: string; // the must-be-client component receiving the prop
+  prop: string;      // attribute name
+  kind: string;      // 'function' | 'class-instance'
+}
+
+/**
+ * Classify a prop-value expression as a serialization hazard, or null if it is
+ * serializable across the RSC server→client boundary. Functions and class
+ * instances are NOT serializable; JSX elements, primitives, object literals,
+ * and member expressions are left to deeper analysis and are not flagged in v1.
+ */
+function hazardKind(expr: Node, localFunctionNames: ReadonlySet<string>): string | null {
+  switch (expr.type) {
+    case 'ArrowFunctionExpression':
+    case 'FunctionExpression':
+      return 'function';
+    case 'NewExpression':
+      return 'class-instance';
+    case 'Identifier':
+      return localFunctionNames.has((expr as Node & { name: string }).name) ? 'function' : null;
+    default:
+      return null; // JSX elements, primitives, object literals, member exprs — not flagged in v1
+  }
+}
+
+/**
+ * Shallow serialization-hazard detection. Walks JSX usages of must-be-client
+ * components (per `isClientComponent`) and flags props whose values are NOT
+ * serializable across the RSC server→client boundary: function expressions,
+ * identifiers bound to a local function, and `new X()` class instances.
+ * React elements (JSX) and primitives ARE serializable and are intentionally
+ * NOT flagged. Shallow: no type-flow, no deep object inspection, no
+ * cross-module tracing — only locally-evident cases.
+ */
+export function findHazardsInModule(
+  analyzed: AnalyzedModule,
+  _code: string,
+  file: string,
+  isClientComponent: (tagName: string) => boolean,
+): SerializationHazard[] {
+  const hazards: SerializationHazard[] = [];
+  const localFunctionNames = new Set<string>();
+  for (const fn of analyzed.functions) {
+    if (fn.name && fn.name !== '<anonymous>') localFunctionNames.add(fn.name);
+  }
+
+  walkNode(analyzed.ast, (node) => {
+    if ((node.type as string) !== 'JSXOpeningElement') return;
+    const el = node as unknown as { name?: { type?: string; name?: string }; attributes?: unknown[] };
+    if (el.name?.type !== 'JSXIdentifier' || !el.name.name) return;
+    const component = el.name.name;
+    if (!isClientComponent(component)) return;
+
+    for (const raw of el.attributes ?? []) {
+      const attr = raw as { type?: string; name?: { name?: string }; value?: unknown };
+      if (attr.type !== 'JSXAttribute' || !attr.name?.name) continue;
+      const value = attr.value as { type?: string; expression?: Node } | null;
+      if (!value || (value.type as string) !== 'JSXExpressionContainer') continue;
+      const expr = value.expression;
+      if (!expr) continue;
+      const kind = hazardKind(expr, localFunctionNames);
+      if (kind) hazards.push({ file, component, prop: attr.name.name, kind });
+    }
+  });
+
+  return hazards;
 }

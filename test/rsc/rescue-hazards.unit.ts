@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { findRescues } from '../../src/rsc/rescue-hazards.js';
+import { findRescues, findHazardsInModule } from '../../src/rsc/rescue-hazards.js';
 import { computeContagion } from '../../src/rsc/contagion.js';
+import { parseModule } from '../../src/analyzer.js';
 import type { ComponentGraph, RscFileResult } from '../../src/rsc/types.js';
 
 function makeGraph(spec: Record<string, { v: RscFileResult['fileVerdict']; imports: string[]; name?: string }>): ComponentGraph {
@@ -56,5 +57,38 @@ describe('findRescues', () => {
       '/Child.tsx':  { v: 'must-be-client', imports: [] },
     });
     expect(findRescues(g, computeContagion(g))).toHaveLength(0);
+  });
+});
+
+const isClient = (n: string) => n === 'Client';
+
+describe('findHazardsInModule', () => {
+  it('flags an inline arrow function prop; ignores sibling serializable props', () => {
+    const code = `export function Parent(){ return <Client onAction={()=>{}} label="x" count={3} ok={true} />; }`;
+    const r = findHazardsInModule(parseModule(code, '/P.tsx'), code, '/P.tsx', isClient);
+    expect(r).toHaveLength(1);
+    expect(r[0]).toMatchObject({ prop: 'onAction', kind: 'function', component: 'Client' });
+  });
+  it('flags an identifier bound to a local function', () => {
+    const code = `export function Parent(){ const handle=()=>{}; return <Client onClick={handle} />; }`;
+    const r = findHazardsInModule(parseModule(code, '/P.tsx'), code, '/P.tsx', isClient);
+    expect(r).toHaveLength(1);
+    expect(r[0]).toMatchObject({ prop: 'onClick', kind: 'function' });
+  });
+  it('flags a class instance passed as a prop', () => {
+    const code = `class Foo{} export function Parent(){ return <Client config={new Foo()} />; }`;
+    const r = findHazardsInModule(parseModule(code, '/P.tsx'), code, '/P.tsx', isClient);
+    expect(r).toHaveLength(1);
+    expect(r[0].kind).toBe('class-instance');
+  });
+  it('does NOT flag JSX-as-prop or children (React elements are serializable in RSC)', () => {
+    const code = `export function Parent(){ return <Client icon={<svg/>}>{<span/>}</Client>; }`;
+    const r = findHazardsInModule(parseModule(code, '/P.tsx'), code, '/P.tsx', isClient);
+    expect(r).toHaveLength(0);
+  });
+  it('does NOT flag serializable props, and ignores non-client components', () => {
+    const code = `export function Parent(){ return (<div><Client title="x" n={3} on={true} data={{a:1}} /><Server onX={()=>{}} /></div>); }`;
+    const r = findHazardsInModule(parseModule(code, '/P.tsx'), code, '/P.tsx', isClient);
+    expect(r).toHaveLength(0); // Client: only serializable props; Server: not a client component
   });
 });
