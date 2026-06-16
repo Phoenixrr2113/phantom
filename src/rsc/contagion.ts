@@ -57,18 +57,52 @@ export function computeContagion(graph: ComponentGraph): ContagionResult {
   return { clientClosure, realizableServer, realizableServerBytes };
 }
 
+/** Files reachable from `starts` by following import edges, staying within `closure` (includes starts). */
+function reachableWithin(
+  starts: Iterable<string>,
+  graph: ComponentGraph,
+  closure: ReadonlySet<string>,
+): Set<string> {
+  const seen = new Set<string>();
+  const queue: string[] = [];
+  for (const s of starts) {
+    if (!seen.has(s)) {
+      seen.add(s);
+      queue.push(s);
+    }
+  }
+  while (queue.length > 0) {
+    const file = queue.shift()!;
+    const node = graph.files.get(file);
+    if (!node) continue;
+    for (const imported of node.imports) {
+      if (closure.has(imported) && !seen.has(imported)) {
+        seen.add(imported);
+        queue.push(imported);
+      }
+    }
+  }
+  return seen;
+}
+
 /**
- * Compute the minimal `'use client'` frontier: the topmost client files. A
- * client file is on the frontier iff NO other client file imports it — i.e.
- * its client-ness isn't already inherited from a client importer. Marking only
- * these files is the smallest directive set that is still correct, because
- * `'use client'` propagates to a module's imports.
+ * Minimal `'use client'` frontier: the smallest set of files to mark such that
+ * every client file ends up client (the directive propagates to a module's
+ * imports). Phase 1 takes the topmost client nodes (those no client file
+ * imports) — minimal and complete for acyclic graphs. Phase 2 covers client
+ * import CYCLES that have no acyclic client entry: such a cycle's members all
+ * import one another, so phase 1 omits them all; we add one representative per
+ * still-uncovered cycle so no client file is ever left without a directive.
+ *
+ * Guarantee: the returned set always covers the entire client closure (safe —
+ * never omits a needed directive). Minimal on acyclic graphs and for a single
+ * cycle; for a client file inside a cycle it marks one representative.
  */
 export function computeFrontier(
   graph: ComponentGraph,
   clientClosure: ReadonlySet<string>,
 ): Set<string> {
-  // Which client files are imported by some *client* file (and thus inherit the directive)?
+  // Phase 1: topmost client nodes (no client importer).
   const importedByClient = new Set<string>();
   for (const file of clientClosure) {
     const node = graph.files.get(file);
@@ -77,10 +111,19 @@ export function computeFrontier(
       if (clientClosure.has(imported)) importedByClient.add(imported);
     }
   }
-  // Frontier = client files that no client file imports.
   const frontier = new Set<string>();
   for (const file of clientClosure) {
     if (!importedByClient.has(file)) frontier.add(file);
+  }
+
+  // Phase 2: ensure full coverage of the closure (handles client cycles with no
+  // acyclic entry, which phase 1 leaves entirely uncovered).
+  const covered = reachableWithin(frontier, graph, clientClosure);
+  const uncovered = [...clientClosure].filter((f) => !covered.has(f)).sort();
+  for (const file of uncovered) {
+    if (covered.has(file)) continue; // already covered by a representative added earlier
+    frontier.add(file);
+    for (const reached of reachableWithin([file], graph, clientClosure)) covered.add(reached);
   }
   return frontier;
 }

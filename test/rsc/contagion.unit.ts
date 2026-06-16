@@ -102,4 +102,36 @@ describe('computeFrontier', () => {
     expect(frontier.has('/Shared.tsx')).toBe(false); // inherits from both
     expect(frontier.size).toBe(2);
   });
+
+  it('covers a client import cycle with no acyclic entry (never empty)', () => {
+    const g = makeGraph({
+      '/A.tsx': { v: 'must-be-client', imports: ['/B.tsx'] },
+      '/B.tsx': { v: 'must-be-client', imports: ['/A.tsx'] },
+    });
+    const { clientClosure } = computeContagion(g);
+    const frontier = computeFrontier(g, clientClosure);
+    expect(frontier.size).toBe(1); // one representative covers the whole cycle
+    // every client file must be the frontier or reachable from it
+    expect(frontier.has('/A.tsx') || frontier.has('/B.tsx')).toBe(true);
+  });
+
+  it('covers a self-importing client file', () => {
+    const g = makeGraph({ '/Solo.tsx': { v: 'must-be-client', imports: ['/Solo.tsx'] } });
+    const { clientClosure } = computeContagion(g);
+    const frontier = computeFrontier(g, clientClosure);
+    expect(frontier.has('/Solo.tsx')).toBe(true);
+    expect(frontier.size).toBe(1);
+  });
+
+  it('does not over-add when a cycle sits below an acyclic client root', () => {
+    const g = makeGraph({
+      '/Root.tsx': { v: 'must-be-client',  imports: ['/A.tsx'] },
+      '/A.tsx':    { v: 'server-eligible', imports: ['/B.tsx'] },
+      '/B.tsx':    { v: 'server-eligible', imports: ['/A.tsx'] }, // cycle below Root
+    });
+    const { clientClosure } = computeContagion(g);
+    const frontier = computeFrontier(g, clientClosure);
+    expect(frontier.size).toBe(1);
+    expect(frontier.has('/Root.tsx')).toBe(true); // Root covers A and B
+  });
 });
