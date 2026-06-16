@@ -18,6 +18,8 @@ Phantom runs at build time (Vite, Webpack, or Rspack) and does two things:
 
 Your source code stays unchanged. Phantom transforms the output at build time.
 
+**Plus: RSC migration analysis.** Separate from the build, the read-only `phantom rsc <dir>` command produces a whole-codebase React Server Components migration map: per-file server-eligible vs must-be-client verdicts, the minimal `'use client'` frontier, the client blast radius, and an honest realizable-server estimate. See [RSC Readiness](#rsc-readiness-phantom-rsc).
+
 ## Quick Start
 
 ### Vite
@@ -393,6 +395,18 @@ Server-eligible: 81 · Realizable after blast radius: 23 (11.3% of component byt
 ```
 
 Read that as follows: 81 files have no per-file blocker to becoming a Server Component, but once client-ness propagates across imports only 23 can actually stay on the server, about 11% of component bytes. That gap is the whole point. The tool reports the real, graph-aware migration surface, not the optimistic per-file count.
+
+**Validated on real codebases** (non-reference apps anonymized), all at 99.8–100% import-edge resolution:
+
+| Codebase | Component files | Server-eligible | Realizable (server) | % of bytes | `'use client'` frontier |
+|---|--:|--:|--:|--:|--:|
+| Production Sitecore JSS app | 258 | 79 | 36 | 8.4% | 108 |
+| Shared UI component library | 113 | 49 | 38 | 41.0% | 42 |
+| E-commerce storefront (Next.js) | 238 | 144 | 120 | 29.8% | 56 |
+| shadcn-admin (reference) | 155 | 81 | 23 | 11.3% | 24 |
+| bulletproof-react (reference) | 54 | 17 | 9 | 12.1% | 18 |
+
+The spread is the point: an interactive enterprise app realizes only ~8% of its component bytes as server (so the value is the frontier and the rescue hints, not a server win), while a static-heavy storefront or a presentational component library realizes 30–41%.
 
 **Honest caveats:**
 
