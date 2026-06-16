@@ -1,7 +1,7 @@
 {
   "name": "phantom-build",
   "version": "0.4.2",
-  "description": "Automatic code-splitting for React — extracts event handlers into lazy-loaded chunks and wraps below-fold components in React.lazy + Suspense at build time",
+  "description": "Build-time code-splitting for React (event-handler extraction + React.lazy/Suspense wrapping), plus a read-only RSC migration-readiness analyzer (phantom rsc)",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
