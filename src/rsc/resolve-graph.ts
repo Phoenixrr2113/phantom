@@ -141,7 +141,10 @@ export function resolveEdge(
 }
 
 const SOURCE_EXT = /\.(tsx|ts|jsx|js)$/;
-const SKIP_DIRS = new Set(['node_modules', 'dist', 'build', 'coverage', '.git', '.next']);
+// Test/spec files don't ship, so they're excluded from the RSC migration map
+// (otherwise they'd show up as noise in the 'use client' frontier).
+const TEST_FILE = /\.(test|spec)\.(tsx|ts|jsx|js)$/;
+const SKIP_DIRS = new Set(['node_modules', 'dist', 'build', 'coverage', '.git', '.next', '__tests__', '__mocks__']);
 // Non-script asset/relative imports are real but are NOT RSC module edges; they
 // must not count against edge-resolution coverage.
 const ASSET_EXT = /\.(css|scss|sass|less|styl|svg|png|jpe?g|gif|webp|avif|ico|json|md|mdx|txt|graphql|gql|wasm|woff2?|ttf|eot|mp4|webm)$/i;
@@ -164,7 +167,7 @@ function walkProjectFiles(root: string): string[] {
         if (SKIP_DIRS.has(entry.name) || entry.name.startsWith('.')) continue;
         stack.push(full);
       } else if (entry.isFile()) {
-        if (entry.name.endsWith('.d.ts')) continue;
+        if (entry.name.endsWith('.d.ts') || TEST_FILE.test(entry.name)) continue;
         if (SOURCE_EXT.test(entry.name)) out.push(full);
       }
     }
