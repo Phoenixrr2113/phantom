@@ -1,7 +1,8 @@
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it, expect } from 'vitest';
-import { resolveImport, loadPathsMatcher } from '../../src/rsc/resolve-graph.js';
+import { parseModule } from '../../src/analyzer.js';
+import { resolveImport, loadPathsMatcher, resolveEdge } from '../../src/rsc/resolve-graph.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -79,5 +80,39 @@ describe('resolveImport with tsconfig aliases', () => {
     expect(
       resolveImport('./Foo', join(projDir, 'src', 'x', 'Bar.tsx'), set, matcher),
     ).toBe(join(projDir, 'src', 'x', 'Foo.tsx'));
+  });
+});
+
+describe('resolveEdge — one-hop barrels', () => {
+  it('follows an index.ts re-export to the defining file', () => {
+    const barrel = parseModule(`export { Foo } from './Foo';`, '/app/components/index.ts');
+    expect(barrel.reExports.length).toBeGreaterThan(0); // sanity: extractor populated it
+    const reExportsByFile = new Map([['/app/components/index.ts', barrel.reExports]]);
+    const fileSet = new Set(['/app/components/index.ts', '/app/components/Foo.tsx', '/app/Bar.tsx']);
+    expect(resolveEdge('./components', '/app/Bar.tsx', 'Foo', fileSet, reExportsByFile))
+      .toBe('/app/components/Foo.tsx');
+  });
+
+  it('handles `export { default as X }` aliased re-exports', () => {
+    const barrel = parseModule(`export { default as Foo } from './Foo';`, '/app/ui/index.ts');
+    const reExportsByFile = new Map([['/app/ui/index.ts', barrel.reExports]]);
+    const fileSet = new Set(['/app/ui/index.ts', '/app/ui/Foo.tsx']);
+    // fromFile must sit beside the `./ui` barrel dir so the specifier resolves
+    // to /app/ui/index.ts before the `default as` hop runs.
+    expect(resolveEdge('./ui', '/app/Bar.tsx', 'Foo', fileSet, reExportsByFile))
+      .toBe('/app/ui/Foo.tsx');
+  });
+
+  it('falls back to the barrel file when the imported name is not re-exported (one hop only)', () => {
+    const barrel = parseModule(`export { Other } from './Other';`, '/app/components/index.ts');
+    const reExportsByFile = new Map([['/app/components/index.ts', barrel.reExports]]);
+    const fileSet = new Set(['/app/components/index.ts', '/app/components/Other.tsx']);
+    expect(resolveEdge('./components', '/app/Bar.tsx', 'Foo', fileSet, reExportsByFile))
+      .toBe('/app/components/index.ts');
+  });
+
+  it('resolves a non-barrel direct import unchanged', () => {
+    expect(resolveEdge('./Foo', '/app/Bar.tsx', 'Foo', new Set(['/app/Foo.tsx']), new Map()))
+      .toBe('/app/Foo.tsx');
   });
 });

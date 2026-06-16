@@ -14,6 +14,7 @@
 
 import { dirname, resolve as resolvePath } from 'node:path';
 import { getTsconfig, createPathsMatcher } from 'get-tsconfig';
+import type { ReExportMapping } from '../types.js';
 
 const RESOLVE_EXTENSIONS = ['.tsx', '.ts', '.jsx', '.js'] as const;
 
@@ -81,4 +82,54 @@ export function resolveImport(
     }
   }
   return null;
+}
+
+/** True when `file` is a barrel index module (`.../index.{tsx,ts,jsx,js}`). */
+function isIndexFile(file: string): boolean {
+  return /(^|\/)index\.(tsx|ts|jsx|js)$/.test(file);
+}
+
+/**
+ * Follow ONE barrel hop. Given a resolved `barrelFile` (an index.*) that is the
+ * target for `importedName`, look the name up in the barrel's re-exports and
+ * resolve the originating module (relative to the barrel). Returns the concrete
+ * file, or null if the name isn't re-exported there or can't be resolved.
+ */
+function resolveBarrelHop(
+  barrelFile: string,
+  importedName: string,
+  reExportsByFile: ReadonlyMap<string, readonly ReExportMapping[]>,
+  fileSet: ReadonlySet<string>,
+  pathsMatcher?: PathsMatcher | null,
+): string | null {
+  const reExports = reExportsByFile.get(barrelFile);
+  if (!reExports) return null;
+  const match = reExports.find((r) => r.exportedName === importedName);
+  if (!match) return null;
+  return resolveImport(match.source, barrelFile, fileSet, pathsMatcher);
+}
+
+/**
+ * Resolve an import EDGE to its concrete defining file, following one barrel hop
+ * when the specifier resolves to an `index.*` that re-exports the imported name.
+ * Falls back to the directly-resolved file (possibly the barrel itself) when no
+ * precise hop exists, and null when nothing resolves. `importedName` is the
+ * source export name (ImportInfo.specifier.imported); pass null for
+ * default/namespace imports (no barrel hop attempted).
+ */
+export function resolveEdge(
+  spec: string,
+  fromFile: string,
+  importedName: string | null,
+  fileSet: ReadonlySet<string>,
+  reExportsByFile: ReadonlyMap<string, readonly ReExportMapping[]>,
+  pathsMatcher?: PathsMatcher | null,
+): string | null {
+  const direct = resolveImport(spec, fromFile, fileSet, pathsMatcher);
+  if (!direct) return null;
+  if (importedName && isIndexFile(direct)) {
+    const hopped = resolveBarrelHop(direct, importedName, reExportsByFile, fileSet, pathsMatcher);
+    if (hopped) return hopped;
+  }
+  return direct;
 }
