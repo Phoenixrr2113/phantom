@@ -1,6 +1,6 @@
 import { parseModule } from '../analyzer.js';
 import { classifyModuleWithContext, classifyModuleSSR } from '../classify/index.js';
-import type { SSRComponentResult } from '../types.js';
+import type { AnalyzedModule, SSRComponentResult } from '../types.js';
 import type { RscFileResult, RscComponentResult, RscVerdict } from './types.js';
 
 /**
@@ -17,16 +17,18 @@ function clientReason(c: SSRComponentResult): string {
 }
 
 /**
- * Classify a single file for React Server Components readiness.
+ * Classify an already-parsed module for React Server Components readiness.
  * `'use client'` is a file-level directive, so the file verdict is a rollup of
  * its components: a file is must-be-client if ANY component is; mixed if it has
  * both server-eligible and must-be-client components (a split candidate);
  * non-component if no React components were detected.
  *
- * `imports` is left empty here and populated later by the graph resolver.
+ * Takes a pre-parsed {@link AnalyzedModule} so callers that already parsed the
+ * file (e.g. the graph resolver) avoid a second parse. The file path is read
+ * from `analyzed.path`. `imports` is left empty here and populated later by the
+ * graph resolver.
  */
-export function classifyFileRsc(code: string, file: string): RscFileResult {
-  const analyzed = parseModule(code, file);
+export function classifyModuleRsc(analyzed: AnalyzedModule, code: string): RscFileResult {
   const ctx = classifyModuleWithContext(analyzed, code);
   const ssr = classifyModuleSSR(analyzed, code, ctx);
 
@@ -56,5 +58,14 @@ export function classifyFileRsc(code: string, file: string): RscFileResult {
     fileVerdict = anyClient && anyServer ? 'mixed' : anyClient ? 'must-be-client' : 'server-eligible';
   }
 
-  return { file, hasComponents, fileVerdict, components, imports: [], sizeBytes: code.length };
+  return { file: analyzed.path, hasComponents, fileVerdict, components, imports: [], sizeBytes: code.length };
+}
+
+/**
+ * Classify a single file for React Server Components readiness. Thin wrapper
+ * over {@link classifyModuleRsc} that parses `code` first; signature and
+ * behavior are unchanged.
+ */
+export function classifyFileRsc(code: string, file: string): RscFileResult {
+  return classifyModuleRsc(parseModule(code, file), code);
 }

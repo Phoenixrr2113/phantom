@@ -8,13 +8,19 @@
  * access is `loadPathsMatcher`, which is built once per project and reused.
  *
  * Handles relative imports and tsconfig path aliases (`@/*`, `~/*`, etc.) via
- * get-tsconfig. Barrel resolution is added to this same file in a later task and
- * reuses `resolveWithExtensions`.
+ * get-tsconfig, plus one-hop barrel resolution (`resolveEdge` / `resolveBarrelHop`,
+ * reusing `resolveWithExtensions`). `buildComponentGraph` ties the classifier and
+ * resolver together over a real directory and computes edge-resolution coverage.
  */
 
-import { dirname, resolve as resolvePath } from 'node:path';
+import { readdirSync, readFileSync } from 'node:fs';
+import type { Dirent } from 'node:fs';
+import { dirname, join, resolve as resolvePath } from 'node:path';
 import { getTsconfig, createPathsMatcher } from 'get-tsconfig';
-import type { ReExportMapping } from '../types.js';
+import { parseModule } from '../analyzer.js';
+import { classifyModuleRsc } from './classify-rsc.js';
+import type { ReExportMapping, AnalyzedModule } from '../types.js';
+import type { ComponentGraph, RscFileResult } from './types.js';
 
 const RESOLVE_EXTENSIONS = ['.tsx', '.ts', '.jsx', '.js'] as const;
 
@@ -132,4 +138,112 @@ export function resolveEdge(
     if (hopped) return hopped;
   }
   return direct;
+}
+
+const SOURCE_EXT = /\.(tsx|ts|jsx|js)$/;
+const SKIP_DIRS = new Set(['node_modules', 'dist', 'build', 'coverage', '.git', '.next']);
+// Non-script asset/relative imports are real but are NOT RSC module edges; they
+// must not count against edge-resolution coverage.
+const ASSET_EXT = /\.(css|scss|sass|less|styl|svg|png|jpe?g|gif|webp|avif|ico|json|md|mdx|txt|graphql|gql|wasm|woff2?|ttf|eot|mp4|webm)$/i;
+
+/** Recursively collect project source files (.tsx/.ts/.jsx/.js, excluding .d.ts). */
+function walkProjectFiles(root: string): string[] {
+  const out: string[] = [];
+  const stack: string[] = [root];
+  while (stack.length > 0) {
+    const current = stack.pop()!;
+    let entries: Dirent<string>[];
+    try {
+      entries = readdirSync(current, { withFileTypes: true });
+    } catch {
+      continue; // unreadable dir — skip
+    }
+    for (const entry of entries) {
+      const full = join(current, entry.name);
+      if (entry.isDirectory()) {
+        if (SKIP_DIRS.has(entry.name) || entry.name.startsWith('.')) continue;
+        stack.push(full);
+      } else if (entry.isFile()) {
+        if (entry.name.endsWith('.d.ts')) continue;
+        if (SOURCE_EXT.test(entry.name)) out.push(full);
+      }
+    }
+  }
+  return out;
+}
+
+/** tsconfig `paths` alias prefixes (e.g. "@/", "~/") used to recognize internal imports. */
+function aliasPrefixesFor(dir: string): string[] {
+  const tsconfig = getTsconfig(dir);
+  const paths = tsconfig?.config?.compilerOptions?.paths;
+  if (!paths) return [];
+  return Object.keys(paths).map((k) => k.replace(/\*$/, ''));
+}
+
+/** Is this import specifier a project-internal module edge we should resolve + measure? */
+function isCountableInternal(source: string, aliasPrefixes: string[]): boolean {
+  if (ASSET_EXT.test(source)) return false; // asset, not a module edge
+  if (source.startsWith('.')) return true; // relative
+  return aliasPrefixes.some((p) => source.startsWith(p)); // tsconfig alias
+}
+
+/**
+ * Build the resolved component import graph over `dir`: classify each source
+ * file, resolve its internal import edges (relative + tsconfig alias + one-hop
+ * barrel), and report `edgeResolution` = resolved / total internal module edges.
+ * External (bare node_modules) and asset imports are excluded from the metric.
+ */
+export function buildComponentGraph(dir: string): ComponentGraph {
+  const root = resolvePath(dir);
+  const files = walkProjectFiles(root);
+  const fileSet = new Set(files);
+  const matcher = loadPathsMatcher(root);
+  const aliasPrefixes = aliasPrefixesFor(root);
+
+  // Parse + classify each file exactly once.
+  const parsed = new Map<string, AnalyzedModule>();
+  const results = new Map<string, RscFileResult>();
+  const reExportsByFile = new Map<string, readonly ReExportMapping[]>();
+  for (const file of files) {
+    let code: string;
+    try {
+      code = readFileSync(file, 'utf-8');
+    } catch {
+      continue;
+    }
+    let analyzed: AnalyzedModule;
+    try {
+      analyzed = parseModule(code, file);
+    } catch {
+      continue; // unparseable file — skip (still a resolvable target via fileSet)
+    }
+    parsed.set(file, analyzed);
+    reExportsByFile.set(file, analyzed.reExports);
+    results.set(file, classifyModuleRsc(analyzed, code));
+  }
+
+  // Resolve edges + measure coverage.
+  let totalEdges = 0;
+  let resolvedEdges = 0;
+  for (const [file, analyzed] of parsed) {
+    const result = results.get(file)!;
+    const targets = new Set<string>();
+    for (const imp of analyzed.imports) {
+      if (!isCountableInternal(imp.source, aliasPrefixes)) continue;
+      totalEdges++;
+      // Metric: does the source resolve to a project file at all?
+      if (resolveImport(imp.source, file, fileSet, matcher)) resolvedEdges++;
+      // Precise edges (barrel-aware) per imported name. `export *` barrels are not
+      // captured by the extractor, so such edges fall back to the barrel index file
+      // rather than the true defining module — a known precision limit, not a miss.
+      for (const spec of imp.specifiers) {
+        const target = resolveEdge(imp.source, file, spec.imported, fileSet, reExportsByFile, matcher);
+        if (target) targets.add(target);
+      }
+    }
+    result.imports = [...targets];
+  }
+
+  const edgeResolution = totalEdges === 0 ? 1 : resolvedEdges / totalEdges;
+  return { files: results, edgeResolution };
 }

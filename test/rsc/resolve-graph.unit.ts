@@ -2,7 +2,12 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it, expect } from 'vitest';
 import { parseModule } from '../../src/analyzer.js';
-import { resolveImport, loadPathsMatcher, resolveEdge } from '../../src/rsc/resolve-graph.js';
+import {
+  resolveImport,
+  loadPathsMatcher,
+  resolveEdge,
+  buildComponentGraph,
+} from '../../src/rsc/resolve-graph.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -114,5 +119,42 @@ describe('resolveEdge — one-hop barrels', () => {
   it('resolves a non-barrel direct import unchanged', () => {
     expect(resolveEdge('./Foo', '/app/Bar.tsx', 'Foo', new Set(['/app/Foo.tsx']), new Map()))
       .toBe('/app/Foo.tsx');
+  });
+});
+
+describe('buildComponentGraph', () => {
+  const graphDir = join(here, '..', 'fixtures', 'rsc', 'graph-basic');
+  const abs = (p: string): string => join(graphDir, p);
+  const graph = buildComponentGraph(graphDir);
+
+  it('classifies every source file in the tree (App, Layout, index, Card, Sidebar)', () => {
+    expect(graph.files.size).toBe(5);
+  });
+
+  it('marks App.tsx must-be-client (useState)', () => {
+    expect(graph.files.get(abs('App.tsx'))!.fileVerdict).toBe('must-be-client');
+  });
+
+  it('marks Card.tsx server-eligible (pure props→JSX)', () => {
+    expect(graph.files.get(abs('components/Card.tsx'))!.fileVerdict).toBe('server-eligible');
+  });
+
+  it('resolves the one-hop barrel edge Layout → components/Card.tsx', () => {
+    // Layout imports { Card } from './components' (an index.ts barrel that
+    // re-exports Card from './Card') — the edge must point at Card.tsx itself.
+    expect(graph.files.get(abs('Layout.tsx'))!.imports).toContain(abs('components/Card.tsx'));
+  });
+
+  it('resolves App → Layout and excludes the external react import', () => {
+    const appImports = graph.files.get(abs('App.tsx'))!.imports;
+    expect(appImports).toContain(abs('Layout.tsx'));
+    expect(appImports.some((i) => /react/.test(i))).toBe(false);
+  });
+
+  it('reports edgeResolution = 2/3 (App→Layout ✓, Layout→components ✓, Sidebar→Gone ✗; react excluded)', () => {
+    // Internal module edges: App→'./Layout' (resolved), Layout→'./components'
+    // (resolved), Sidebar→'./Gone' (unresolved, file absent). `react` is a bare
+    // external import and is excluded from the metric entirely.
+    expect(graph.edgeResolution).toBeCloseTo(2 / 3);
   });
 });
