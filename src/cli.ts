@@ -1,34 +1,45 @@
 #!/usr/bin/env node
 
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { analyzeModule } from './analyzer.js';
+import { analyzeRscReadiness, toJSON, toMarkdown, toTerminal } from './rsc/index.js';
+import type { RscReport } from './rsc/types.js';
 
 // ── Argument parsing ─────────────────────────────────────────────────
 
 function printUsage(): void {
   console.log(`
-Usage: phantom analyze <file> [options]
+Usage: phantom <command> [options]
 
-  Analyze a React/TypeScript file and print segment classification details,
-  showing which event handlers would be extracted into lazy-loaded chunks.
+  Static analysis for React/TypeScript codebases. Classify a single file's
+  segments for lazy extraction, or map a whole directory's React Server
+  Components readiness.
 
 Commands:
   analyze <file>    Analyze a single .tsx/.ts file for extractable segments
+  rsc <dir>         Map a directory's RSC readiness (client frontier, rescues,
+                      serialization hazards). Report-only — never writes source.
 
 Options:
   --threshold <0-1>             Confidence threshold for extraction (default: 0.8)
                                   Higher values extract fewer, more certain handlers.
                                   Lower values extract more aggressively.
+                                  (analyze only)
   --min-handler-size <bytes>    Minimum handler size in bytes to consider for
                                   extraction (default: 200). Set to 0 to see all
-                                  handlers regardless of size.
+                                  handlers regardless of size. (analyze only)
+  --json                        Emit the RSC report as JSON to stdout. (rsc only)
+  --markdown <out>              Write a Markdown RSC report to <out>. (rsc only)
   --help, -h                    Show this help message
 
 Examples:
   phantom analyze src/components/Button.tsx
   phantom analyze src/components/Form.tsx --threshold 0.9
   phantom analyze src/components/Modal.tsx --threshold 0.7 --min-handler-size 0
+  phantom rsc src/
+  phantom rsc src/ --json
+  phantom rsc src/ --markdown rsc-report.md
 
 Output columns:
   Name          Handler or component name
@@ -51,6 +62,57 @@ Troubleshooting:
 `.trim());
 }
 
+function runRsc(args: string[]): void {
+  const dir = args[1];
+  if (!dir || dir.startsWith('-')) {
+    console.error('Error: No directory specified for "rsc"');
+    printUsage();
+    process.exit(1);
+  }
+
+  const json = args.includes('--json');
+  let markdownOut: string | undefined;
+  const mdIdx = args.indexOf('--markdown');
+  if (mdIdx !== -1) {
+    markdownOut = args[mdIdx + 1];
+    if (!markdownOut || markdownOut.startsWith('-')) {
+      console.error('Error: --markdown requires an output path');
+      process.exit(1);
+    }
+  }
+
+  const absDir = resolve(dir);
+  if (!existsSync(absDir)) {
+    console.error(`Error: Directory not found: "${absDir}"`);
+    process.exit(1);
+  }
+
+  let report: RscReport;
+  try {
+    report = analyzeRscReadiness(absDir);
+  } catch (err) {
+    console.error(
+      `Error: RSC analysis failed for "${absDir}": ${err instanceof Error ? err.message : String(err)}`,
+    );
+    process.exit(1);
+  }
+
+  // Write markdown to a file if requested (notice goes to stderr so --json stdout stays pure JSON).
+  if (markdownOut) {
+    writeFileSync(resolve(markdownOut), toMarkdown(report), 'utf-8');
+    console.error(`Markdown report written to ${markdownOut}`);
+  }
+
+  if (json) {
+    console.log(toJSON(report));
+  } else {
+    console.log(`\nPhantom RSC Readiness: ${dir}`);
+    console.log('═'.repeat(60));
+    console.log(toTerminal(report));
+    console.log('');
+  }
+}
+
 function main(): void {
   const args = process.argv.slice(2);
 
@@ -60,6 +122,12 @@ function main(): void {
   }
 
   const command = args[0];
+
+  if (command === 'rsc') {
+    runRsc(args);
+    return;
+  }
+
   if (command !== 'analyze') {
     console.error(`Unknown command: ${command}`);
     printUsage();
