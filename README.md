@@ -367,6 +367,42 @@ Options:
   --help, -h                    Show this help message
 ```
 
+### RSC Readiness (`phantom rsc`)
+
+`phantom rsc <dir>` runs a whole-codebase React Server Components migration map over an existing React app. It is read-only and report-only, so it never edits your source. It reuses Phantom's SSR-boundary classifier and adds cross-module graph analysis to answer the questions a per-file `'use client'` linter cannot:
+
+- which files are **server-eligible** vs **must-be-client**, and why
+- the minimal **`'use client'` frontier** to add (the topmost client files; everything they import inherits the directive)
+- the client **blast radius** along the import graph (server-eligible files trapped on the client because a client file imports them)
+- an honest **realizable-server estimate** (files and bytes), always printed next to the import-edge resolution coverage so the number is interpretable
+- **rescue** opportunities (a trapped server file that one client parent could pass as `children` to keep on the server)
+- shallow **serialization hazards** (a function or class instance passed across a server-to-client boundary)
+
+```bash
+npx phantom rsc src/
+npx phantom rsc src/ --json                # machine-readable RscReport
+npx phantom rsc src/ --markdown rsc.md      # also write a markdown report
+```
+
+Example, run against the shadcn-admin reference app:
+
+```
+155 component files · import graph 100% resolved
+Server-eligible: 81 · Realizable after blast radius: 23 (11.3% of component bytes)
+'use client' frontier: 24 files to mark
+```
+
+Read that as follows: 81 files have no per-file blocker to becoming a Server Component, but once client-ness propagates across imports only 23 can actually stay on the server, about 11% of component bytes. That gap is the whole point. The tool reports the real, graph-aware migration surface, not the optimistic per-file count.
+
+**Honest caveats:**
+
+- It is a **map, not a transform**. v1 produces a report only; there is no codemod.
+- **Accuracy is conservative by design.** When unsure, it classifies a file `must-be-client` (safe) rather than `server-eligible` (which could break a migration). A `useState` component is "SSR-safe" for first paint but is still `must-be-client` for RSC, and the tool treats it that way.
+- **The realizable-server slice is often small** on real apps. The interactive and vendor shell dominates, which is expected. The value is the accurate map plus the rescue and hazard hints, not a large server-component win.
+- The **realizable-server figure is only as trustworthy as the import-edge resolution**, which is always printed beside it. Below 90%, the tool prints a lower-confidence warning, because unresolved edges under-propagate client-ness and over-report server-eligibility.
+
+The analysis core is framework-agnostic; the advice wording is Next-first. Import resolution handles relative imports, `tsconfig` path aliases (`@/...`), and one-hop barrel (`index.ts`) re-exports.
+
 ## Build Manifest
 
 Each build produces a `phantom.manifest.json` describing all extractions:

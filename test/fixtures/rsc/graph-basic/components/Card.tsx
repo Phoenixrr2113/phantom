@@ -1,0 +1,1 @@
+export function Card({title}:{title:string}){ return <div>{title}</div>; }

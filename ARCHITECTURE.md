@@ -658,6 +658,34 @@ After `buildEnd`, phantom writes `phantom.manifest.json`:
 }
 ```
 
+## RSC Readiness Analysis Pass (`phantom rsc`)
+
+Separate from the per-module build transform, `phantom rsc <dir>` runs a whole-project, read-only analysis that produces a React Server Components migration map. It **reuses** the parser (`parseModule`) and the SSR-boundary classifier (`classifyModuleSSR`), then adds cross-module graph analysis on top. It never emits or mutates code.
+
+It is a pipeline of five isolated units in `src/rsc/`:
+
+```
+files (*.tsx/*.ts/*.jsx/*.js)
+  → parse + SSR-classify each              (reuse: analyzer + classifier)
+  → per-file RSC verdict + reasons         (unit 2: classify-rsc.ts)
+  → resolve import edges → component graph  (unit 1: resolve-graph.ts)
+  → propagate contagion → closure, realizable-server, minimal frontier (unit 3: contagion.ts)
+  → rescue + hazard detection              (unit 4: rescue-hazards.ts)
+  → emit human + JSON report               (unit 5: report.ts)
+```
+
+1. **Graph resolver** (`resolve-graph.ts`): the highest-risk unit. It resolves every relative, `tsconfig`-alias (`@/...`, via `get-tsconfig`), and one-hop barrel (`index.ts` re-export) import to a concrete file, and reports an edge-resolution coverage fraction. Missed edges under-propagate client-ness, so this unit is heavily tested and gated at >=90% resolution on real corpora (it reaches 100% on shadcn-admin and bulletproof-react).
+
+2. **RSC classifier** (`classify-rsc.ts`): maps the SSR classification to an RSC verdict. `FullyStatic` becomes `server-eligible`; `SSRSafe` or `ClientOnly` becomes `must-be-client`. The subtlety is that `SSRSafe` means "safe to server-render for first paint" (a `useState` component qualifies), which is broader than "can be a Server Component," so a stateful component is correctly `must-be-client`. A file is `mixed` (a split candidate) when it contains both a server-eligible and a must-be-client component.
+
+3. **Contagion + frontier** (`contagion.ts`): pure graph algorithms. Seeds are files that are intrinsically client. Client-ness propagates forward along import edges, importer to imported: a client file's imports are also client. The result is the client closure, the realizable-server set (server-eligible files not in the closure), and the minimal `'use client'` frontier (the topmost client files; a cyclic client group with no acyclic entry gets one representative, so a needed directive is never omitted).
+
+4. **Rescue + hazard detection** (`rescue-hazards.ts`): shallow heuristics. A rescue candidate is a server-eligible file pulled into the closure by exactly one direct client importer, which can often be passed as `children` to stay on the server (since `children` is not an import). A hazard is a function or class instance passed as a prop to a must-be-client component from a server-eligible file. React elements and primitives are serializable across the boundary and are not flagged.
+
+5. **Report** (`report.ts`) and **orchestrator** (`index.ts`): `analyzeRscReadiness(dir)` runs units 1 through 4 and assembles an `RscReport`; `report.ts` renders it as terminal text, markdown, or stable JSON.
+
+**Conservative bias throughout.** When unsure, the analysis prefers `must-be-client` (safe) over `server-eligible` (unsafe), and it always prints the import-edge resolution coverage next to any realizable-server figure so the number can be judged.
+
 ## File Map
 
 ```
@@ -684,9 +712,18 @@ src/
 │   └── lazy-transform.ts     Phase 4 — React.lazy() + Suspense AST mutations
 │                             Exports: applyLazyTransforms()
 │
+├── rsc/                      RSC readiness analysis (`phantom rsc`), read-only
+│   ├── types.ts              RscVerdict, RscFileResult, ComponentGraph, RscReport
+│   ├── classify-rsc.ts       unit 2: per-file RSC verdict from SSR classification
+│   ├── resolve-graph.ts      unit 1: import graph (relative + alias + barrel) + coverage
+│   ├── contagion.ts          unit 3: client closure, realizable-server, minimal frontier
+│   ├── rescue-hazards.ts     unit 4: children-rescue + serialization hazards
+│   ├── report.ts             unit 5: toJSON / toMarkdown / toTerminal
+│   └── index.ts              orchestrator: analyzeRscReadiness(dir)
+│
 ├── types.ts                  All shared type definitions
 ├── index.ts                  Public API exports
-├── cli.ts                    CLI: `phantom analyze <file>`
+├── cli.ts                    CLI: `phantom analyze <file>`, `phantom rsc <dir>`
 ├── ast-compat.ts             OXC → ESTree metadata patching
 └── vite.ts / webpack.ts      Framework-specific plugin exports
 ```
