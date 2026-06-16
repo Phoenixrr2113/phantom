@@ -180,7 +180,13 @@ function aliasPrefixesFor(dir: string): string[] {
   const tsconfig = getTsconfig(dir);
   const paths = tsconfig?.config?.compilerOptions?.paths;
   if (!paths) return [];
-  return Object.keys(paths).map((k) => k.replace(/\*$/, ''));
+  // Drop the bare "*" catch-all: it strips to an empty prefix that would match
+  // every bare external package (react, @scope/pkg, …) and pollute the coverage
+  // metric. The "*" mapping still resolves baseUrl-relative internal imports as
+  // edges (via the matcher); it just isn't a meaningful "is-internal" signal.
+  return Object.keys(paths)
+    .map((k) => k.replace(/\*$/, ''))
+    .filter((prefix) => prefix.length > 0);
 }
 
 /** Is this import specifier a project-internal module edge we should resolve + measure? */
@@ -233,13 +239,19 @@ export function buildComponentGraph(dir: string): ComponentGraph {
     const targets = new Set<string>();
     const localToTarget = new Map<string, string>();
     for (const imp of analyzed.imports) {
-      if (!isCountableInternal(imp.source, aliasPrefixes)) continue;
-      totalEdges++;
-      // Metric: does the source resolve to a project file at all?
-      if (resolveImport(imp.source, file, fileSet, matcher)) resolvedEdges++;
-      // Precise edges (barrel-aware) per imported name. `export *` barrels are not
-      // captured by the extractor, so such edges fall back to the barrel index file
-      // rather than the true defining module — a known precision limit, not a miss.
+      if (ASSET_EXT.test(imp.source)) continue; // assets are never module edges
+      // Coverage metric: count only imports we're confident are project-internal
+      // (relative or a specific tsconfig alias). Bare specifiers are dominated by
+      // external packages, so counting them would understate resolution.
+      if (isCountableInternal(imp.source, aliasPrefixes)) {
+        totalEdges++;
+        if (resolveImport(imp.source, file, fileSet, matcher)) resolvedEdges++;
+      }
+      // Edges: attempt resolution for every non-asset import and add one only if it
+      // lands on a real project file. This captures relative, alias, and baseUrl-
+      // relative ("*" catch-all) internal imports without fabricating an edge to an
+      // external package (those resolve to null). `export *` barrels fall back to the
+      // barrel index file rather than the true defining module — a precision limit.
       for (const spec of imp.specifiers) {
         const target = resolveEdge(imp.source, file, spec.imported, fileSet, reExportsByFile, matcher);
         if (target) {

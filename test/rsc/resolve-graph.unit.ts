@@ -158,3 +158,25 @@ describe('buildComponentGraph', () => {
     expect(graph.edgeResolution).toBeCloseTo(2 / 3);
   });
 });
+
+describe('buildComponentGraph — tsconfig "*" catch-all path', () => {
+  // Regression: a tsconfig `paths` mapping of `"*": ["*"]` (a baseUrl catch-all)
+  // must not make every bare external import (react, @scope/pkg) count as an
+  // internal edge — that tanked a real Sitecore app from 100% to 32%.
+  const dir = join(here, '..', 'fixtures', 'rsc', 'star-paths');
+  const graph = buildComponentGraph(dir);
+  const appKey = (): string => [...graph.files.keys()].find((f) => f.endsWith('App.tsx'))!;
+
+  it('does not let the bare "*" path count external imports against resolution', () => {
+    // App imports `react` (external), `@/Helper` (alias), `./Local` (relative).
+    // Only the two project-internal edges count, and both resolve → 100%.
+    expect(graph.edgeResolution).toBe(1);
+  });
+
+  it('still resolves the @/ alias and relative edges (no edges fabricated for react)', () => {
+    const appImports = graph.files.get(appKey())!.imports;
+    expect(appImports.some((p) => p.endsWith('Helper.tsx'))).toBe(true);
+    expect(appImports.some((p) => p.endsWith('Local.tsx'))).toBe(true);
+    expect(appImports.some((p) => /react/.test(p))).toBe(false);
+  });
+});
