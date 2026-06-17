@@ -1,6 +1,6 @@
 {
   "name": "phantom-build",
-  "version": "0.4.2",
+  "version": "0.5.0",
   "description": "Build-time code-splitting for React (event-handler extraction + React.lazy/Suspense wrapping), plus a read-only RSC migration-readiness analyzer (phantom rsc)",
   "type": "module",
   "main": "./dist/index.js",
